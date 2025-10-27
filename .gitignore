@@ -1,0 +1,21 @@
+# Node & logs
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# Env & local data
+.env
+.env.*
+*.sqlite
+*.db
+/data/
+tmp/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db

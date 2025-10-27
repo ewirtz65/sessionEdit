@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres         # keep these; harmless when reusing data
+      POSTGRES_PASSWORD: changeme     # ignored if data dir already initialized
+      POSTGRES_DB: transcripts
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
+    external: true
+    name: sessionedit_pgdata   # ← matches the volume you listed
