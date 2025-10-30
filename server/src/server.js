@@ -18,6 +18,45 @@ function splitTxt(text) {
     .map(t => t.replace(/\s+/g," ").trim())
     .filter(Boolean);
 }
+// Spelling normalization for in-text mentions and speaker names
+const NAME_MAP = {
+  "dane": "Dain",
+  "jonny": "Johnny",
+  "crudark": "Crudark",
+  "krudark": "Crudark",
+  "kudark": "Crudark",
+  "kudar": "Crudark",
+  "krudar": "Crudark",
+  "kudak": "Crudark",
+  "kruidark": "Crudark",
+  "kruidork": "Crudark",
+  "rudark": "Crudark",
+  "prudark": "Crudark",
+  "grudark": "Crudark",
+  "enda": "Inda",
+  "trubik": "Truvik",
+  "vekna": "Vecna",
+};
+
+// Fix whole-word matches, case-insensitive (e.g., "jonny" -> "Johnny")
+function applyNameFixes(text) {
+  if (!text) return text;
+  let out = text;
+  for (const [bad, good] of Object.entries(NAME_MAP)) {
+    // \b boundaries; keep it simple and safe (no partial-in-word hits)
+    const re = new RegExp(`\\b${bad}\\b`, "gi");
+    out = out.replace(re, good);
+  }
+  return out;
+}
+
+// Normalize a speaker label if it matches a bad spelling
+function normalizeSpeakerName(name) {
+  if (!name) return name;
+  const good = NAME_MAP[name.toLowerCase()];
+  return good || name;
+}
+
 function parseTimed(text) {
   const src = text.replace(/\r/g, "");
   const blocks = src.split(/\n\s*\n/);
@@ -411,9 +450,12 @@ async function cleanupTranscript(prisma, transcriptId) {
   const items = await prisma.segment.findMany({ where: { transcriptId }, orderBy: { createdAt: "asc" } });
   const { line, trailing } = mkTimeRegex();
   let deleted = 0, updated = 0;
+
   for (const s of items) {
     const t = s.text.trim();
     if (/^WEBVTT$/i.test(t)) { await prisma.segment.delete({ where: { id: s.id } }); deleted++; continue; }
+
+    // 1) Strip timing lines / collapse whitespace (existing behavior)
     const cleaned = t
       .split(/\n+/)
       .map(L => {
@@ -422,11 +464,32 @@ async function cleanupTranscript(prisma, transcriptId) {
         return line.test(L) ? "" : L;
       })
       .filter(Boolean).join(" ").replace(/\s+/g," ").trim();
-    if (!cleaned) { await prisma.segment.delete({ where: { id: s.id } }); deleted++; }
-    else if (cleaned !== s.text) { await prisma.segment.update({ where: { id: s.id }, data: { text: cleaned } }); updated++; }
+
+    if (!cleaned) {
+      await prisma.segment.delete({ where: { id: s.id } }); deleted++;
+      continue;
+    }
+
+    // 2) Apply name fixes to text + normalize speaker
+    const fixedText = applyNameFixes(cleaned);
+    const fixedSpeaker = normalizeSpeakerName(s.speakerName || null);
+
+    // 3) Update only if something changed
+    const needsTextUpdate = fixedText !== s.text;
+    const needsSpeakerUpdate = fixedSpeaker !== (s.speakerName || null);
+
+    if (needsTextUpdate || needsSpeakerUpdate) {
+      await prisma.segment.update({
+        where: { id: s.id },
+        data: { text: fixedText, speakerName: fixedSpeaker }
+      });
+      updated++;
+    }
   }
+
   return { updated, deleted };
 }
+
 
 // --- one-click cleanup for the *current/latest* transcript
 app.post("/api/transcripts/cleanup/latest", async (_req, res) => {
@@ -617,4 +680,56 @@ app.post("/api/admin/wipe", async (req, res) => {
     console.error("WIPE_ERROR:", e);
     res.status(500).json({ error: String(e.message || e) });
   }
+});
+// Create a new segment at the end of a transcript
+app.post("/api/segments", async (req, res) => {
+  const Body = z.object({
+    transcriptId: z.string().min(1),
+    text: z.string().min(1),
+    speakerName: z.string().optional(),
+    startSec: z.number().optional(),
+    endSec: z.number().optional(),
+  });
+  const b = Body.parse(req.body);
+  const seg = await prisma.segment.create({
+    data: {
+      transcriptId: b.transcriptId,
+      text: b.text,
+      speakerName: b.speakerName || null,
+      startSec: b.startSec,
+      endSec: b.endSec,
+    }
+  });
+  res.json(seg);
+});
+
+// Insert before/after an existing segment by nudging createdAt
+app.post("/api/segments/:anchorId/insert", async (req, res) => {
+  const Body = z.object({
+    where: z.enum(["before","after"]),
+    text: z.string().min(1),
+    speakerName: z.string().optional(),
+    startSec: z.number().optional(),
+    endSec: z.number().optional(),
+  });
+  const b = Body.parse(req.body);
+  const anchor = await prisma.segment.findUnique({ where: { id: req.params.anchorId }});
+  if (!anchor) return res.status(404).json({ error: "anchor not found" });
+
+  // Strategy: set createdAt equal to anchor for "after" (id tie-breaker puts new after),
+  // or 1 ms earlier for "before". Your list uses createdAt asc, then id asc. :contentReference[oaicite:2]{index=2}
+  const t = anchor.createdAt ? new Date(anchor.createdAt) : new Date();
+  const createdAt = (b.where === "before") ? new Date(t.getTime() - 1) : new Date(t.getTime());
+
+  const seg = await prisma.segment.create({
+    data: {
+      transcriptId: anchor.transcriptId,
+      text: b.text,
+      speakerName: b.speakerName || null,
+      startSec: b.startSec,
+      endSec: b.endSec,
+      createdAt,
+    }
+  });
+  res.json(seg);
 });

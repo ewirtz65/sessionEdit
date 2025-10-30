@@ -19,6 +19,44 @@
     .seg header { display:flex; gap:10px; align-items:center; margin-bottom:6px; }
     .muted { color:#999; font-size:12px; }
     .pill { padding:2px 8px; border:1px solid #333; border-radius:999px; }
+    .composer { border: 1px dashed #888; padding: 6px; background: rgba(0,0,0,0.04); }
+    /* Unassigned-speaker highlight */
+.seg.no-speaker {
+  outline: 2px solid #0b5ed7;            /* dark blue frame */
+  box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+}
+.seg.no-speaker header {
+  background: #0b5ed7;                   /* dark blue header */
+  color: #fff;
+}
+.seg.no-speaker .pill {
+  background: rgba(255,255,255,0.18);
+  color: #fff;
+}
+.seg.no-speaker .speaker {
+  border-color: #0b5ed7;
+}
+.seg.no-speaker .text {
+  border-color: #0b5ed7;
+  background: rgba(11, 94, 215, 0.04);
+}
+.float-counter{
+  position:fixed;
+  color: cyan; 
+  right:16px;
+  bottom:16px;
+  z-index:1000;
+  background:#111;
+  border:1px solid #333;
+  border-radius:10px;
+  padding:8px 10px;
+  box-shadow:0 6px 18px rgba(0,0,0,0.35);
+  backdrop-filter:saturate(140%) blur(4px);
+  cursor:pointer;
+  user-select:none;
+}
+.float-counter:hover{ background:#161616; }
+
   </style>
 </head>
 <body>
@@ -114,6 +152,7 @@
   <footer class="muted">
     Tip: Click a segment → choose a speaker → edit text. Changes save immediately.
   </footer>
+<div id="segCountFloat" class="float-counter muted" title="Shown vs total segments"></div>
 
   <script type="module" src="./ui.js"></script>
 </body>

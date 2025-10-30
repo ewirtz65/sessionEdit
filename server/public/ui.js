@@ -56,7 +56,7 @@ async function refreshTranscriptsForSession(sid, pickId = null) {
     if (prev && list.some(t => t.id === prev)) tsel.value = prev; else tsel.value = "";
 }
 
-let speakers = ["Narrator",  "Crudark", "Lift", "Johann", "Dain", "Truvik", "Inda", "Speaker A", "Speaker B"];
+let speakers = ["Narrator",  "Crudark", "Lift", "Johann", "Dain", "Truvik", "Inda","Celestian", "Speaker A", "Speaker B"];
 
 // pagination/filter/search state
 let pageSize = 200;
@@ -164,139 +164,169 @@ function groupify(items, maxChars = 320) {
   if (cur) out.push(cur);
   return out;
 }
-
-
-
+const segFloat = document.getElementById("segCountFloat");
+if (segFloat && !segFloat.dataset.bound) {
+  segFloat.dataset.bound = "1";
+  segFloat.addEventListener("click", () => {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+}
 function render(items) {
-    const grouped = $("groupView").checked ? groupify(items) : items;
+  const grouped = $("groupView").checked ? groupify(items) : items;
 
+  $("segments").innerHTML = grouped.map(s => {
+    const id = s.id;
+    const speaker = s.speakerName || "";        // ← safe per-item
+    const text = s.text || "";
+    const noSpeakerClass = speaker ? "" : " no-speaker";
 
-$("segments").innerHTML = grouped.map(s => `
-  <div class="seg" data-id="${s.id}">
-<header>
-  <input type="checkbox" class="sel"/>
-  <span class="pill">${s.speakerName || "—"}</span>
-  <select class="speaker">${speakerOptions(s.speakerName || "")}</select>
-  <button class="btn copy" style="margin-left:auto;">Copy</button>
-  <button class="btn del"  title="Delete segment" style="border-color:#5a1a1a;">Delete</button>
-</header>
-    <textarea class="text">${s.text}</textarea>
-  </div>
-`).join("");
+    return `
+    <div class="seg${noSpeakerClass}" data-id="${id}">
+      <header>
+        <input type="checkbox" class="sel" name="select-${id}" />
+        <button type="button" class="btn ins-above" title="Insert above" name="above-${id}">+ Above</button>
+        <button type="button" class="btn ins-below"  title="Insert below"  name="below-${id}">+ Below</button>
+        <button type="button" class="btn merge-up"   title="Merge into previous" name="mergeup-${id}">Merge ↑</button>
+        <span class="pill">${speaker || "—"}</span>
+        <select class="speaker" name="speaker-${id}">${speakerOptions(speaker)}</select>
+        <button type="button" class="btn copy" style="margin-left:auto;">Copy</button>
+        <button type="button" class="btn del"  title="Delete segment" style="border-color:#5a1a1a;">Delete</button>
+      </header>
+      <textarea class="text" name="text-${id}">${text.replace(/</g,"&lt;")}</textarea>
+    </div>`;
+  }).join("");
 
-// update shown/total count
-const shown = grouped.length;
-const countEl = document.getElementById("segCount");
-if (countEl) countEl.textContent = `(${shown} shown of ${total})`;
+  // update shown/total count
+  const shown = grouped.length;
+  const countEl = document.getElementById("segCount");
+  if (countEl) countEl.textContent = `(${shown} shown of ${total})`;
+const label = `(${shown} shown of ${total})`;
+if (countEl) countEl.textContent = label;
 
-// refresh page info + buttons (top & bottom)
-updatePagerUI();
+const segFloatNow = document.getElementById("segCountFloat");
+if (segFloatNow) segFloatNow.textContent = `Segments ${label}`;
+  // refresh pager
+  updatePagerUI();
 
-    // wire events
-// wire events for each rendered segment card
-document.querySelectorAll(".seg").forEach((el) => {
-  const id = el.dataset.id;
+  // wire events per segment
+  document.querySelectorAll(".seg").forEach((el) => {
+    const id = el.dataset.id;
 
-  // #4 — Save speaker *then* update local state, *then* re-render current page only
-  el.querySelector(".speaker").addEventListener("change", async (e) => {
-    const speakerName = e.target.value || null;
-    await save(id, { speakerName });                  // PUT /api/segments/:id
-    const item = curItems.find(x => x.id === id);     // keep local (page) cache consistent
-    if (item) item.speakerName = speakerName;
-    render(curItems);                                  // no refetch => other speakers stay intact
-  });
-
-  // Save text edits, keep local state, and re-render current page
-  el.querySelector(".text").addEventListener("change", async (e) => {
-    const text = e.target.value;
-    await save(id, { text });
-    const item = curItems.find(x => x.id === id);
-    if (item) item.text = text;
-    // no need to re-render unless you want to refresh pill labels, etc.
-  });
-
-  // Copy just this segment’s text
-el.querySelector(".copy").addEventListener("click", async (e) => {
-  const btn = e.target;
-  const textarea = el.querySelector(".text");
-  const text = textarea.value;
-  
-  try {
-    // Try modern clipboard API first (works on localhost/HTTPS)
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      // Fallback for non-secure contexts (HTTP on local network)
-      textarea.select();
-      textarea.setSelectionRange(0, 99999); // For mobile
-      document.execCommand('copy');
-      window.getSelection().removeAllRanges(); // Deselect
+    // keep selected Set in sync with per-item checkbox
+    const cb = el.querySelector(".sel");
+    if (cb) {
+      cb.addEventListener("change", (e) => {
+        if (e.target.checked) selected.add(id);
+        else selected.delete(id);
+      });
     }
-    
-    // Visual feedback
-    const original = btn.textContent;
-    btn.textContent = "✓ Copied!";
-    btn.style.background = "#1a4d1a";
-    setTimeout(() => {
-      btn.textContent = original;
-      btn.style.background = "";
-    }, 1500);
-  } catch (err) {
-    status("Copy failed: " + err.message);
-    console.error("Clipboard error:", err);
-  }
-});
-selected.clear(); // reset on re-render (page-scoped selection)
-document.querySelectorAll(".seg").forEach((el) => {
-  const id = el.dataset.id;
-  // row checkbox handler
-  el.querySelector(".sel").addEventListener("change", (e) => {
-    if (e.target.checked) selected.add(id); else selected.delete(id);
+
+    el.querySelector(".speaker").addEventListener("change", async (e) => {
+      const speakerName = e.target.value || null;
+      await save(id, { speakerName });                       // PUT /api/segments/:id
+      const item = curItems.find(x => x.id === id);
+      if (item) item.speakerName = speakerName;
+      render(curItems);                                       // redraw to update pill + class
+    });
+
+    el.querySelector(".text").addEventListener("change", async (e) => {
+      const text = e.target.value;
+      await save(id, { text });
+      const item = curItems.find(x => x.id === id);
+      if (item) item.text = text;
+    });
+
+    el.querySelector(".copy").addEventListener("click", async (e) => {
+      const btn = e.target;
+      const textarea = el.querySelector(".text");
+      const text = textarea.value;
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          textarea.select();
+          textarea.setSelectionRange(0, 99999);
+          document.execCommand('copy');
+          window.getSelection().removeAllRanges();
+        }
+        const original = btn.textContent;
+        btn.textContent = "✓ Copied!";
+        btn.style.background = "#1a4d1a";
+        setTimeout(() => { btn.textContent = original; btn.style.background = ""; }, 1500);
+      } catch (err) {
+        status("Copy failed: " + err.message);
+      }
+    });
+// inside render(...), where you wire per-segment events:
+el.querySelector(".merge-up").addEventListener("click", async () => {
+  const thisId = el.dataset.id;
+  const idx = curItems.findIndex(x => x.id === thisId);
+  if (idx <= 0) { status("Nothing above to merge into."); return; }
+
+  const prev = curItems[idx - 1];
+  const curr = curItems[idx];
+
+  const prevText = (prev.text || "").trim();
+  const currText = (curr.text || "").trim();
+  const mergedText = (prevText + " " + currText).replace(/\s+/g, " ").trim();
+
+  // 1) Update the previous segment's text
+  const r1 = await fetch(`/api/segments/${prev.id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: mergedText })
   });
+  if (!r1.ok) { status("Merge failed while updating above segment."); return; }
 
-  // ...existing listeners for .speaker, .text, .copy, .del...
-});
-  // Delete (surgical: update local page; only refetch if page becomes empty)
-el.querySelector(".del")?.addEventListener("click", async () => {
-//   if (!confirm("Delete this segment?")) return;
+  // keep local cache consistent
+  prev.text = mergedText;
 
-  // Always read the id fresh from the element
-  const clickedId = el.dataset.id;
+  // 2) Delete the current segment
+  const r2 = await fetch(`/api/segments/${thisId}`, { method: "DELETE" });
+  if (!r2.ok) { status("Merge failed while deleting current segment."); return; }
 
-  // Find its index in the data backing this page
-  const idx = curItems.findIndex(x => x.id === clickedId);
-
-  // Pick the next logical focus target from curItems (data), not DOM
-  const nextId   = curItems[idx + 1]?.id || null;
-  const prevId   = idx > 0 ? curItems[idx - 1].id : null;
-  const focusId  = nextId || prevId || null;
-
-  // Delete on server
-  const r = await fetch(`/api/segments/${clickedId}`, { method: "DELETE" });
-  if (!r.ok) { status("Delete failed."); return; }
-
-  // Adjust total and, if we were at the very end, snap offset to the new last page
+  // 3) Adjust counters/pagination like your single-delete flow
   total = Math.max(0, total - 1);
   const pages = Math.max(1, Math.ceil(Math.max(1, total) / pageSize));
   const newOffset = Math.min(offset, (pages - 1) * pageSize);
   if (newOffset !== offset) offset = newOffset;
 
-  // Re-fetch this page so it refills to pageSize (when possible)
-  await loadPage(false, focusId);  // loadPage(reset=false, focusId=the neighbor)
+  // 4) Reload this page and focus the merged-into segment’s textarea
+  await loadPage(false, prev.id);
+  const t = document.querySelector(`.seg[data-id="${prev.id}"] .text`);
+  if (t) t.focus();
 
-  // If that id isn't on this page anymore, focus the first textarea so you can keep editing
-  if (focusId) {
-    const t = document.querySelector(`.seg[data-id="${focusId}"] .text`);
-    if (!t) {
-      const first = document.querySelector(".seg .text");
-      if (first) first.focus();
-    }
-  }
+  status("Merged up.");
 });
 
+    el.querySelector(".del")?.addEventListener("click", async () => {
+      const clickedId = el.dataset.id;
+      const idx = curItems.findIndex(x => x.id === clickedId);
+      const nextId = curItems[idx + 1]?.id || null;
+      const prevId = idx > 0 ? curItems[idx - 1].id : null;
+      const focusId = nextId || prevId || null;
 
-});
+      const r = await fetch(`/api/segments/${clickedId}`, { method: "DELETE" });
+      if (!r.ok) { status("Delete failed."); return; }
 
+      total = Math.max(0, total - 1);
+      const pages = Math.max(1, Math.ceil(Math.max(1, total) / pageSize));
+      const newOffset = Math.min(offset, (pages - 1) * pageSize);
+      if (newOffset !== offset) offset = newOffset;
+
+      await loadPage(false, focusId);
+      if (focusId) {
+        const t = document.querySelector(`.seg[data-id="${focusId}"] .text`);
+        if (!t) {
+          const first = document.querySelector(".seg .text");
+          if (first) first.focus();
+        }
+      }
+    });
+
+    el.querySelector(".ins-above").addEventListener("click", () => openInlineComposer(el, "before"));
+    el.querySelector(".ins-below").addEventListener("click", () => openInlineComposer(el, "after"));
+  });
 }
 
 async function save(id, patch) {
@@ -315,6 +345,45 @@ async function save(id, patch) {
     status("Save error: " + err.message);
     console.error("Save failed:", err);
   }
+}
+function openInlineComposer(containerEl, where) {
+  if (containerEl.querySelector(".composer")) return;
+  const id = containerEl.dataset.id;
+  const currentSpeaker = containerEl.querySelector(".speaker")?.value || "";
+
+  const div = document.createElement("div");
+  div.className = "composer";
+  div.style.marginTop = "6px";
+  div.innerHTML = `
+    <div class="row" style="gap:6px; align-items:flex-start;">
+      <select class="composer-speaker">${speakerOptions(currentSpeaker)}</select>
+      <textarea class="composer-text" placeholder="New segment text…"></textarea>
+      <button class="btn composer-save">Insert ${where}</button>
+      <button class="btn composer-cancel">Cancel</button>
+    </div>`;
+  containerEl.appendChild(div);
+
+  div.querySelector(".composer-cancel").addEventListener("click", () => div.remove());
+  div.querySelector(".composer-save").addEventListener("click", async () => {
+    const text = div.querySelector(".composer-text").value.trim();
+    const speakerName = div.querySelector(".composer-speaker").value || null;
+    
+    if (!text) { status("Enter some text"); return; }
+
+    // Call the insert endpoint
+    const resp = await fetch(`/api/segments/${id}/insert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ where, text, speakerName })
+    });
+    const seg = await resp.json();
+    if (!resp.ok || seg.error) { status(seg.error || "Insert failed"); return; }
+
+    // Keep count & reload current page; focus the new segment
+    total = total + 1;
+    await loadPage(false, seg.id); // loadPage(reset=false, focus the new one) :contentReference[oaicite:6]{index=6}
+    status("Inserted.");
+  });
 }
 
 function syncPageSizeSelects() {
