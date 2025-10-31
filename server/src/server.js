@@ -35,7 +35,11 @@ const NAME_MAP = {
   "grudark": "Crudark",
   "enda": "Inda",
   "trubik": "Truvik",
+  "elephant": "Illithid",
   "vekna": "Vecna",
+  "opelix": "obelisk",
+  "lyft": "Lift",
+  "liv": "Lift",
 };
 
 // Fix whole-word matches, case-insensitive (e.g., "jonny" -> "Johnny")
