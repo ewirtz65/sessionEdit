@@ -56,6 +56,7 @@
   user-select:none;
 }
 .float-counter:hover{ background:#161616; }
+.seg.playing { outline:2px solid #2b8a3e; box-shadow:0 0 0 2px #2b8a3e66 inset; }
 
   </style>
 </head>
@@ -63,6 +64,7 @@
   <header>
     <strong>D&D Transcript Editor</strong>
   </header>
+<audio id="player" controls preload="metadata" style="position:sticky;top:0;z-index:5;width:100%"></audio>
 
   <main>
     <section class="card">
@@ -105,6 +107,17 @@
     <strong>Segments</strong>
     <span class="muted" id="segCount"></span>
   </div>
+  <div id="paintbar" class="pill" style="display:flex;gap:.5rem;align-items:center;">
+  <label>Paint speaker:</label>
+  <select id="paintSpeaker"></select>
+  <button id="paintClear" type="button" class="btn">Clear</button>
+  <span id="paintHint" style="opacity:.7">Tip: hold Shift and click to paint continuously</span>
+</div>
+<div id="addressTools" class="pill" style="display:flex;gap:.5rem;align-items:center;">
+  <label>Addressed to:</label>
+  <select id="addressWho"></select>
+  <button id="addressApply" type="button" class="btn">Rewrite “you” → name (selected range)</button>
+</div>
   <div class="row" style="gap:6px;">
     <input id="markPattern" placeholder="Mark text (e.g., OOC:, [rules])"/>
 <button class="btn" id="markMatches">Mark matches</button>

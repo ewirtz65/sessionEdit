@@ -104,18 +104,25 @@ async function getOrCreateSession({ title, date, notes, prisma }) {
 const prisma = new PrismaClient();
 const app = express();
 
-app.post("/api/import", upload.single("file"), async (req, res) => {
+// replace your kept /api/import with this version
+const importUpload = upload.fields([{ name: "file", maxCount: 1 }, { name: "audio", maxCount: 1 }]);
+app.post("/api/import", importUpload, async (req, res) => {
   try {
     const title = (req.body?.title || "").trim();
     if (!title) return res.status(400).json({ error: "title is required" });
 
-    const session = await getOrCreateSession({ title, date: req.body?.date, notes: req.body?.notes, prisma });
+    const session = await getOrCreateSession({
+      title,
+      date: req.body?.date,
+      notes: req.body?.notes,
+      prisma
+    });
 
     let text = "";
     let fileName = req.body?.fileName || "uploaded.txt";
-    if (req.file) {
-      fileName = req.file.originalname || fileName;
-      text = req.file.buffer.toString("utf8");
+    if (req.files?.file?.[0]) {
+      fileName = req.files.file[0].originalname || fileName;
+      text = req.files.file[0].buffer.toString("utf8");
     } else {
       text = req.body?.text || "";
     }
@@ -124,13 +131,31 @@ app.post("/api/import", upload.single("file"), async (req, res) => {
     const looksTimed =
       /^WEBVTT/m.test(text) ||
       /\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}/.test(text) ||
-      /\b\d+[.,]\d{3}\s*-->\s*\d+[.,]\d{3}/.test(text); // short VTT times
+      /\b\d+[.,]\d{3}\s*-->\s*\d+[.,]\d{3}/.test(text);
 
     const segments = looksTimed ? parseTimed(text) : splitTxt(text);
 
-    const transcript = await prisma.transcript.create({
+    // create transcript first
+    let transcript = await prisma.transcript.create({
       data: { sessionId: session.id, fileName }
     });
+
+    // optional audio attach
+    const audio = req.files?.audio?.[0];
+    if (audio) {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      const dir = path.join(process.cwd(), "uploads", "audio");
+      await fs.mkdir(dir, { recursive: true });
+      const outPath = path.join(dir, `${Date.now()}-${audio.originalname}`);
+      await fs.writeFile(outPath, audio.buffer);
+      const rel = `/uploads/audio/${path.basename(outPath)}`;
+      transcript = await prisma.transcript.update({
+        where: { id: transcript.id },
+        data: { audioUrl: rel },
+        select: { id: true, sessionId: true, fileName: true, audioUrl: true }
+      });
+    }
 
     if (segments.length) {
       await prisma.$transaction(async (tx) => {
@@ -148,152 +173,14 @@ app.post("/api/import", upload.single("file"), async (req, res) => {
 });
 
 
-
-
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(morgan("dev"));
 app.use(express.static(path.join(__dirname, "..", "public")));
+app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
 
-/**
- * POST /api/import
- * Accepts:
- *  - JSON: { title, date?, notes?, text }    // paste raw transcript text
- *  - or multipart/form-data: title, file     // upload .srt/.vtt/.txt
- * Behavior:
- *  - upsert session by title
- *  - create transcript, split into segments
- * Returns { session, transcript, segmentsCreated }
- */
-
-app.post("/api/import", upload.single("file"), async (req, res) => {
-  const isMultipart = !!req.file;
-  const title = isMultipart ? req.body.title : req.body.title;
-  if (!title) return res.status(400).json({ error: "title is required" });
-
-  const date  = isMultipart ? req.body.date  : req.body.date;
-  const notes = isMultipart ? req.body.notes : req.body.notes;
-
-  const session = await getOrCreateSession({ title, date, notes });
-
-  // Load text from body or file
-  let text = "";
-  let fileName = "uploaded.txt";
-  if (isMultipart) {
-    fileName = req.file?.originalname || fileName;
-    text = Buffer.from(req.file.buffer).toString("utf8");
-  } else {
-    fileName = req.body.fileName || fileName;
-    text = req.body.text || "";
-  }
-  if (!text.trim()) return res.status(400).json({ error: "empty transcript" });
-
-  // naive SRT/VTT detection and splitting// inside /api/import
-const srtTimeLine =
-  /(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})/;
-const isVTT = /^WEBVTT/m.test(text);
-// Decide parser
-const looksTimed =
-  /^WEBVTT/m.test(text) ||
-  /\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}/.test(text) ||
-  /\b\d+[.,]\d{3}\s*-->\s*\d+[.,]\d{3}/.test(text); // e.g., 2.640 --> 7.120
-
-// Build text-only segments (no times)
-let rows = [];
-if (looksTimed) {
-  const src = text.replace(/\r/g, "");
-  const blocks = src.split(/\n\s*\n/);
-
-  // time token: HH:MM:SS.mmm | M:SS.mmm | S.mmm
-  const timeToken = String.raw`(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{3})?|\d+(?:[.,]\d{3})`;
-  const timeRange = new RegExp(
-    `^\\s*(${timeToken})\\s*-->\\s*(${timeToken})\\s*(.*)$`, "i"
-  );
-
-  for (const b of blocks) {
-    const lines = b.split("\n").map(l => l.trim()).filter(Boolean);
-    if (!lines.length) continue;
-
-    // Skip global header like "WEBVTT"
-    if (lines.length === 1 && /^WEBVTT$/i.test(lines[0])) continue;
-
-    let i = 0;
-    if (/^\d+$/.test(lines[0])) i = 1;           // drop numeric cue index
-
-    // If first payload line is a time range...
-    let carry = "";
-    const m = timeRange.exec(lines[i] || "");
-    if (m) { carry = m[3] ? m[3].trim() : ""; i += 1; }
-
-    const content = [carry, ...lines.slice(i)]
-      .join(" ")
-      .replace(/<[^>]+>/g, "")    // strip tags
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (content) rows.push({ text: content });
-  }
-} else {
-  // TXT mode: blank line = new segment
-  rows = text
-    .replace(/\r/g, "")
-    .split(/\n\s*\n/)
-    .map(t => ({ text: t.replace(/\s+/g, " ").trim() }))
-    .filter(r => r.text);
-}
-
-
-
-
-if (looksTimed) {
-  // Collapse each cue to plain text only
-  const blocks = text.replace(/\r/g, "").split(/\n\s*\n/);
-  for (const b of blocks) {
-    const lines = b.split("\n").map(x => x.trim()).filter(Boolean);
-    if (!lines.length) continue;
-
-    // Skip index line if present
-    let i = /^\d+$/.test(lines[0]) ? 1 : 0;
-
-    // If line i is a time range, drop it; keep content lines
-    if (srtTimeLine.test(lines[i] || "")) i += 1;
-
-    // Join remaining lines as one segment, strip HTML tags
-    const content = lines.slice(i).join(" ").replace(/<[^>]+>/g, "").trim();
-    if (content) rows.push({ text: content });
-  }
-} else {
-  // TXT mode: split on blank lines
-  rows = text
-    .replace(/\r/g, "")
-    .split(/\n\s*\n/)
-    .map(t => ({ text: t.replace(/\s+/g, " ").trim() }))
-    .filter(r => r.text);
-}
-
-// Create transcript + segments (no times saved)
-const transcript = await prisma.transcript.create({
-  data: { sessionId: session.id, fileName }
-});
-
-if (rows.length) {
-  await prisma.$transaction(async (tx) => {
-    for (const r of rows) {
-      await tx.segment.create({
-        data: {
-          transcriptId: transcript.id,
-          text: r.text,
-          // no startSec/endSec at all
-        }
-      });
-    }
-  });
-}
-
-res.json({ session, transcript, segmentsCreated: rows.length });
-});
 // GET /api/transcripts/:id/segments?limit=200&offset=0&speaker=&q=
 app.get("/api/transcripts/:id/segments", async (req, res) => {
   const id = req.params.id;
@@ -736,4 +623,37 @@ app.post("/api/segments/:anchorId/insert", async (req, res) => {
     }
   });
   res.json(seg);
+});
+// GET /api/transcripts/:id
+app.get("/api/transcripts/:id", async (req, res) => {
+  const t = await prisma.transcript.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, fileName: true, createdAt: true, audioUrl: true, sessionId: true }
+  });
+  if (!t) return res.status(404).json({ error: "not found" });
+  res.json(t);
+});
+// POST /api/transcripts/:id/audio  (multipart form: field name "audio")
+const audioUpload = upload.single("audio");
+app.post("/api/transcripts/:id/audio", audioUpload, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "audio file required" });
+
+  // Save file to /uploads/audio/<timestamp>-<originalname>
+  const fs = await import("fs/promises");
+  const path = await import("path");
+  const dir = path.join(process.cwd(), "uploads", "audio");
+  await fs.mkdir(dir, { recursive: true });
+  const outPath = path.join(dir, `${Date.now()}-${req.file.originalname}`);
+  await fs.writeFile(outPath, req.file.buffer);
+
+  // Make a browser URL
+  const rel = `/uploads/audio/${path.basename(outPath)}`;
+
+  const t = await prisma.transcript.update({
+    where: { id: req.params.id },
+    data: { audioUrl: rel },
+    select: { id: true, audioUrl: true }
+  });
+
+  res.json(t);
 });

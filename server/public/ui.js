@@ -13,12 +13,99 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "]") { if (offset + pageSize < total) { offset = Math.min(total - pageSize, offset + pageSize); loadPage(); } }
 });
 
-
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 // fetch helpers
 async function getJSON(url) {
     const r = await fetch(url, { cache: "no-store" });
     if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
     return r.json();
+}
+function fixAddressedTo(text, targetRaw) {
+  const target = (targetRaw || "").trim();
+  if (!target) return text;
+
+  // ---------- helpers ----------
+  const capSentenceWe = t =>
+    t.replace(/(^|[.!?]\s+)(we)\b/g, (_, pre, we) => pre + "We");
+
+  // ---------- MODE A: you -> WE/US/OUR/OURS/OURSELVES ----------
+  if (target.toLowerCase() === "we") {
+    const rules = [
+      // contractions and auxiliaries
+      { re: /\byou're\b/gi, repl: "we're" },
+      { re: /\byou’ve\b/gi, repl: "we've" },
+      { re: /\byou've\b/gi, repl: "we've" },
+      { re: /\byou’ll\b/gi, repl: "we'll" },
+      { re: /\byou'll\b/gi, repl: "we'll" },
+      { re: /\byou’d\b/gi, repl: "we'd" },
+      { re: /\byou'd\b/gi, repl: "we'd" },
+      // verbs be/have in statements
+      { re: /\byou are\b/gi, repl: "we are" },
+      { re: /\byou were\b/gi, repl: "we were" },
+      { re: /\byou have\b/gi, repl: "we have" },
+      { re: /\byou had\b/gi, repl: "we had" },
+      // common question forms: "are you", "did you", "will you", etc.
+      { re: /\b(are|were|do|did|does|can|could|will|would|should|have|has|had)\s+you\b/gi, repl: "$1 we" },
+
+      // reflexive
+      { re: /\byourself\b/gi, repl: "ourselves" }, // single → plural is OK for party
+      { re: /\byourselves\b/gi, repl: "ourselves" },
+
+      // possessives
+      { re: /\byours\b/gi, repl: "ours" },
+      { re: /\byour\b/gi, repl: "our" },
+
+      // object case with prepositions: "to you" → "to us", etc.
+      { re: /\b(to|for|with|at|from|of|by|about|like|than|around|near|after|before|without|between|among|over|under|inside|outside|into|onto|upon|beside|behind|within)\s+you\b/gi, repl: "$1 us" },
+
+      // fallback object-question form: "...you?" → "...us?" (rare)
+      { re: /(\b)\?(\s*)you\b/gi, repl: "$1?$2us" },
+
+      // plain "you" last (subject or remaining object) → "we"
+      { re: /\byou\b/gi, repl: "we" },
+    ];
+
+    let out = rules.reduce((t, r) => t.replace(r.re, r.repl), text);
+    out = capSentenceWe(out);
+    return out;
+  }
+
+  // ---------- MODE B: you -> NAME (Johnny, Dain, etc.) ----------
+  // Basic name-safe possessives and contractions; stays simple and predictable.
+  const name = target;
+  const nameRules = [
+    // contractions / auxiliaries
+    { re: /\byou’re\b/gi, repl: `${name}’s` },   // you're -> Johnny’s (is)
+    { re: /\byou're\b/gi, repl: `${name}'s` },
+    { re: /\byou’ve\b/gi, repl: `${name} has` },
+    { re: /\byou've\b/gi, repl: `${name} has` },
+    { re: /\byou’ll\b/gi, repl: `${name} will` },
+    { re: /\byou'll\b/gi, repl: `${name} will` },
+    { re: /\byou’d\b/gi, repl: `${name} would` },
+    { re: /\byou'd\b/gi, repl: `${name} would` },
+    // be/have/was-were
+    { re: /\byou are\b/gi, repl: `${name} is` },
+    { re: /\bare you\b/gi, repl: `is ${name}` }, // "are you..." → "is Johnny..."
+    { re: /\byou were\b/gi, repl: `${name} was` },
+    { re: /\bwere you\b/gi, repl: `was ${name}` },
+    { re: /\byou have\b/gi, repl: `${name} has` },
+    { re: /\bhave you\b/gi, repl: `has ${name}` },
+    { re: /\byou had\b/gi, repl: `${name} had` },
+    { re: /\bhad you\b/gi, repl: `had ${name}` },
+
+    // reflexive / possessive
+    { re: /\byourself\b/gi, repl: `${name}self` },
+    { re: /\byours\b/gi, repl: `${name}'s` },
+    { re: /\byour\b/gi, repl: `${name}'s` },
+
+    // preposition + you → preposition + NAME (object)
+    { re: /\b(to|for|with|at|from|of|by|about|like|than|around|near|after|before|without|between|among|over|under|inside|outside|into|onto|upon|beside|behind|within)\s+you\b/gi, repl: `$1 ${name}` },
+
+    // remaining plain "you" → NAME
+    { re: /\byou\b/gi, repl: name },
+  ];
+
+  return nameRules.reduce((t, r) => t.replace(r.re, r.repl), text);
 }
 
 async function refreshSessions(selectId = null) {
@@ -70,6 +157,16 @@ function speakerOptions(selected = "") {
     ).join("");
 }
 
+function initPaintbar() {
+  const sel = $("paintSpeaker");
+  if (!sel) return;
+  sel.innerHTML = speakerOptions("").replace('value="" selected','value=""'); // reuse
+  $("paintClear").onclick = ()=>{ sel.value=""; document.body.classList.remove("painting"); };
+  sel.onchange = ()=>{
+    document.body.classList.toggle("painting", !!sel.value);
+  };
+}
+initPaintbar();
 
 
 
@@ -184,6 +281,10 @@ function render(items) {
     <div class="seg${noSpeakerClass}" data-id="${id}">
       <header>
         <input type="checkbox" class="sel" name="select-${id}" />
+        <button type="button" class="btn play" data-start="${s.startSec||0}" data-end="${s.endSec||0}">▶︎</button>
+        <button type="button" class="btn you2name" title="Rewrite 'you' → paint speaker">You→Name</button>
+        <button type="button" class="btn you2we"   title="Rewrite 'you' → we/us/our">You→We</button>
+
         <button type="button" class="btn ins-above" title="Insert above" name="above-${id}">+ Above</button>
         <button type="button" class="btn ins-below"  title="Insert below"  name="below-${id}">+ Below</button>
         <button type="button" class="btn merge-up"   title="Merge into previous" name="mergeup-${id}">Merge ↑</button>
@@ -193,8 +294,59 @@ function render(items) {
         <button type="button" class="btn del"  title="Delete segment" style="border-color:#5a1a1a;">Delete</button>
       </header>
       <textarea class="text" name="text-${id}">${text.replace(/</g,"&lt;")}</textarea>
-    </div>`;
+    </div>
+`;
   }).join("");
+const player = $("player");
+let isShiftDown = false;
+document.addEventListener("keydown", e=>{ if(e.key==="Shift") isShiftDown = true; });
+document.addEventListener("keyup",   e=>{ if(e.key==="Shift") isShiftDown = false; });
+
+const paintSel = $("paintSpeaker");
+if (paintSel) {
+  $$(".seg").forEach(el=>{
+    el.addEventListener("click", async (e)=>{
+      if (!document.body.classList.contains("painting")) return;
+      const speakerName = paintSel.value || null;
+      const id = el.dataset.id;
+      await save(id, { speakerName });
+      const item = curItems.find(x=> String(x.id)===String(id));
+      if (item) item.speakerName = speakerName;
+      el.querySelector(".pill").textContent = speakerName || "—";
+      el.classList.toggle("no-speaker", !speakerName);
+      if (isShiftDown) {
+        // move to next visible seg so you can quickly paint forward
+        const next = el.nextElementSibling;
+        if (next) next.scrollIntoView({block:"center"}), next.focus();
+      }
+    });
+  });
+}
+
+// hook up per-card play
+$$(".seg .btn.play").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    const start = parseFloat(btn.dataset.start||"0");
+    const end   = parseFloat(btn.dataset.end||"0");
+    player.currentTime = start;
+    player.play();
+    player.dataset.segEnd = end; // remember where to stop
+  });
+});
+
+// live highlight of the currently playing segment
+player.addEventListener("timeupdate", ()=>{
+  const t = player.currentTime;
+  const end = parseFloat(player.dataset.segEnd||"0");
+  $$(".seg").forEach(el=>{
+    const s = parseFloat(el.dataset.start||"0");
+    const e = parseFloat(el.dataset.end||"0");
+    const active = t >= s && (e ? t < e : true);
+    el.classList.toggle("playing", active);
+    if (active) el.scrollIntoView({block:"center", behavior:"smooth"});
+  });
+  if (end && t > end) player.pause();
+});
 
   // update shown/total count
   const shown = grouped.length;
@@ -221,20 +373,25 @@ if (segFloatNow) segFloatNow.textContent = `Segments ${label}`;
       });
     }
 
-    el.querySelector(".speaker").addEventListener("change", async (e) => {
-      const speakerName = e.target.value || null;
-      await save(id, { speakerName });                       // PUT /api/segments/:id
-      const item = curItems.find(x => x.id === id);
-      if (item) item.speakerName = speakerName;
-      render(curItems);                                       // redraw to update pill + class
-    });
+el.querySelector(".speaker").addEventListener("change", async (e) => {
+  const speakerName = e.target.value || null;
+  try {
+    await save(id, { speakerName });                     // PUT /api/segments/:id
+    // update local cache
+    const item = curItems.find(x => String(x.id) === String(id));
+    if (item) item.speakerName = speakerName;
+    // update UI inline (no full rerender)
+    el.querySelector(".pill").textContent = speakerName || "—";
+    el.classList.toggle("no-speaker", !speakerName);     // card
+    el.querySelector("header")?.classList.toggle("no-speaker", !speakerName); // header
+  } catch (err) {
+    console.error(err);
+    status(String(err.message || err));                  // your existing status toaster, if present
+    // revert dropdown to previous known value
+    e.target.value = item?.speakerName || "";
+  }
+});
 
-    el.querySelector(".text").addEventListener("change", async (e) => {
-      const text = e.target.value;
-      await save(id, { text });
-      const item = curItems.find(x => x.id === id);
-      if (item) item.text = text;
-    });
 
     el.querySelector(".copy").addEventListener("click", async (e) => {
       const btn = e.target;
@@ -327,25 +484,51 @@ el.querySelector(".merge-up").addEventListener("click", async () => {
     el.querySelector(".ins-above").addEventListener("click", () => openInlineComposer(el, "before"));
     el.querySelector(".ins-below").addEventListener("click", () => openInlineComposer(el, "after"));
   });
+  // You→Name
+$$(".seg .you2name").forEach(btn=>{
+  btn.addEventListener("click", async ()=>{
+    const card = btn.closest(".seg");
+    const id = card.dataset.id;
+    const ta = card.querySelector("textarea.text");
+    const who = $("paintSpeaker")?.value;
+    if (!who) { status("Pick a name in Paint speaker first."); return; }
+    const newText = fixAddressedTo(ta.value, who);
+    ta.value = newText;
+    await save(id, { text: newText });
+    const item = curItems.find(x=> String(x.id) === String(id));
+    if (item) item.text = newText;
+  });
+});
+
+// You→We
+$$(".seg .you2we").forEach(btn=>{
+  btn.addEventListener("click", async ()=>{
+    const card = btn.closest(".seg");
+    const id = card.dataset.id;
+    const ta = card.querySelector("textarea.text");
+    const newText = fixAddressedTo(ta.value, "we");
+    ta.value = newText;
+    await save(id, { text: newText });
+    const item = curItems.find(x=> String(x.id) === String(id));
+    if (item) item.text = newText;
+  });
+});
+
 }
 
 async function save(id, patch) {
-  try {
-    const resp = await fetch(`/api/segments/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch)
-    });
-    if (!resp.ok) {
-      const err = await resp.json();
-      throw new Error(err.error || "Save failed");
-    }
-    return await resp.json();
-  } catch (err) {
-    status("Save error: " + err.message);
-    console.error("Save failed:", err);
+  const r = await fetch(`/api/segments/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch)
+  });
+  if (!r.ok) {
+    const msg = await r.text().catch(()=>r.statusText);
+    throw new Error(`Save failed (${r.status}): ${msg}`);
   }
+  return r.json().catch(()=> ({}));
 }
+
 function openInlineComposer(containerEl, where) {
   if (containerEl.querySelector(".composer")) return;
   const id = containerEl.dataset.id;
@@ -675,3 +858,36 @@ bind("openLatest", "click", async () => {
     }
 });
 
+(function initAddressTools(){
+  const who = $("addressWho");
+  if (!who) return;
+  who.innerHTML = speakerOptions("").replace('value="" selected','value=""');
+
+  $("addressApply").onclick = async ()=>{
+    const name = who.value;
+    if (!name) return;
+    const targets = [...$$(".seg.in-range")];
+    if (targets.length===0) return;
+
+    // pull, rewrite, save each selected card’s text
+    for (const el of targets) {
+      const id = el.dataset.id;
+      const ta = el.querySelector("textarea.text");
+      const newText = fixAddressedTo(ta.value, name);
+      ta.value = newText;
+      await save(id, { text: newText });
+      const item = curItems.find(x=> String(x.id)===String(id));
+      if (item) item.text = newText;
+    }
+
+    targets.forEach(el=> el.classList.remove("in-range"));
+  };
+})();
+document.addEventListener("keydown", (e)=>{
+  const playing = $(".seg.playing") || $(".seg:focus") || $(".seg");
+  if (!playing) return;
+  if (e.key==="j") playing.nextElementSibling?.scrollIntoView({block:"center"});
+  if (e.key==="k") playing.previousElementSibling?.scrollIntoView({block:"center"});
+  if (e.key.toLowerCase()==="s") $("player")?.paused ? $("player").play() : $("player").pause();
+  if (e.key.toLowerCase()==="a") playing.querySelector(".speaker")?.focus();
+});
