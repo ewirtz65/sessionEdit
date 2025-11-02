@@ -15,7 +15,8 @@ pnpm-debug.log*
 tmp/
 dist/
 build/
-
+uploads/
+uploads/audio/
 # OS
 .DS_Store
 Thumbs.db

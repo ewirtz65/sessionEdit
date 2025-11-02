@@ -61,26 +61,33 @@ function normalizeSpeakerName(name) {
   return good || name;
 }
 
+function toSec(tok) {
+  // supports H:MM:SS.mmm, MM:SS.mmm, SS.mmm, with . or ,
+  const s = String(tok).trim().replace(",", ".");
+  const parts = s.split(":").map(Number);
+  if (parts.length === 1) return parseFloat(parts[0] || 0);
+  if (parts.length === 2) return parts[0] * 60 + parseFloat(parts[1] || 0);
+  // H:MM:SS(.ms)
+  return (parts[0] * 3600) + (parts[1] * 60) + parseFloat(parts[2] || 0);
+}
 function parseTimed(text) {
   const src = text.replace(/\r/g, "");
   const blocks = src.split(/\n\s*\n/);
   const segs = [];
-
-  // time token: HH:MM:SS.mmm | M:SS.mmm | S.mmm
   const timeToken = '(?:\\d{1,2}:)?\\d{1,2}:\\d{2}(?:[.,]\\d{3})?|\\d+(?:[.,]\\d{3})';
-  const timeRange = new RegExp(`^\\s*(${timeToken})\\s*-->\\s*(${timeToken})\\s*(.*)$`, "i");
+  const timeRange = new RegExp(`^\\s*(${timeToken})\\s*-->\\s*(${timeToken})(?:\\s+.*)?$`, "i");
 
   for (const b of blocks) {
     const lines = b.split("\n").map(l => l.trim()).filter(Boolean);
     if (!lines.length) continue;
-    if (lines.length === 1 && /^WEBVTT$/i.test(lines[0])) continue; // skip header
+    if (lines.length === 1 && /^WEBVTT$/i.test(lines[0])) continue;
 
     let i = 0;
-    if (/^\d+$/.test(lines[0])) i = 1;          // numeric cue index
+    if (/^\d+$/.test(lines[0])) i = 1; // cue index
 
-    let carry = "";
+    let start = null, end = null, carry = "";
     const m = timeRange.exec(lines[i] || "");
-    if (m) { carry = m[3] ? m[3].trim() : ""; i += 1; }
+    if (m) { start = toSec(m[1]); end = toSec(m[2]); carry = m[3] ? m[3].trim() : ""; i += 1; }
 
     const content = [carry, ...lines.slice(i)]
       .join(" ")
@@ -88,7 +95,7 @@ function parseTimed(text) {
       .replace(/\s+/g, " ")
       .trim();
 
-    if (content) segs.push(content);
+    if (content) segs.push({ text: content, startSec: start ?? null, endSec: end ?? null });
   }
   return segs;
 }
@@ -133,7 +140,7 @@ app.post("/api/import", importUpload, async (req, res) => {
       /\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}/.test(text) ||
       /\b\d+[.,]\d{3}\s*-->\s*\d+[.,]\d{3}/.test(text);
 
-    const segments = looksTimed ? parseTimed(text) : splitTxt(text);
+    const segments = looksTimed ? parseTimed(text) : splitTxt(text).map(t => ({ text: t }));
 
     // create transcript first
     let transcript = await prisma.transcript.create({
@@ -158,12 +165,19 @@ app.post("/api/import", importUpload, async (req, res) => {
     }
 
     if (segments.length) {
-      await prisma.$transaction(async (tx) => {
-        for (const t of segments) {
-          await tx.segment.create({ data: { transcriptId: transcript.id, text: t } });
-        }
-      });
-    }
+   await prisma.$transaction(async (tx) => {
+     for (const s of segments) {
+       await tx.segment.create({
+         data: {
+           transcriptId: transcript.id,
+           text: s.text,
+           startSec: s.startSec ?? undefined,
+           endSec:   s.endSec   ?? undefined,
+         }
+       });
+     }
+   });
+ }
 
     res.json({ session, transcript, segmentsCreated: segments.length });
   } catch (err) {
@@ -199,7 +213,7 @@ const [items, total] = await Promise.all([
     orderBy: [{ createdAt: "asc" }, { id: "asc" }], // ← stable order
     skip: offset,
     take: limit,
-    select: { id: true, text: true, speakerName: true }
+    select: { id: true, text: true, speakerName: true, startSec: true, endSec: true }
   }),
   prisma.segment.count({ where })
 ]);
@@ -341,19 +355,31 @@ async function cleanupTranscript(prisma, transcriptId) {
   const items = await prisma.segment.findMany({ where: { transcriptId }, orderBy: { createdAt: "asc" } });
   const { line, trailing } = mkTimeRegex();
   let deleted = 0, updated = 0;
+function toSec(tok) {
+  const s = String(tok).trim().replace(",", ".");
+  const parts = s.split(":").map(Number);
+  if (parts.length === 1) return parseFloat(parts[0] || 0);
+  if (parts.length === 2) return parts[0] * 60 + parseFloat(parts[1] || 0);
+  return (parts[0] * 3600) + (parts[1] * 60) + parseFloat(parts[2] || 0);
+}
+const full = new RegExp(String.raw`^\s*(${String.raw`(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{3})?|\d+(?:[.,]\d{3})`})\s*-->\s*(${String.raw`(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{3})?|\d+(?:[.,]\d{3})`})(?:\s+.*)?$`, "i");
+
 
   for (const s of items) {
     const t = s.text.trim();
     if (/^WEBVTT$/i.test(t)) { await prisma.segment.delete({ where: { id: s.id } }); deleted++; continue; }
 
     // 1) Strip timing lines / collapse whitespace (existing behavior)
-    const cleaned = t
-      .split(/\n+/)
-      .map(L => {
-        const m = L.match(trailing);
-        if (m) return (m[1] || "").trim();
-        return line.test(L) ? "" : L;
-      })
+let foundStart = null, foundEnd = null;
+ const cleaned = t
+   .split(/\n+/)
+   .map(L => {
+     const fm = L.match(full);
+     if (fm) { foundStart = toSec(fm[1]); foundEnd = toSec(fm[2]); return ""; }
+     const m = L.match(trailing);
+     if (m) return (m[1] || "").trim();
+     return line.test(L) ? "" : L;
+   })
       .filter(Boolean).join(" ").replace(/\s+/g," ").trim();
 
     if (!cleaned) {
@@ -369,13 +395,18 @@ async function cleanupTranscript(prisma, transcriptId) {
     const needsTextUpdate = fixedText !== s.text;
     const needsSpeakerUpdate = fixedSpeaker !== (s.speakerName || null);
 
-    if (needsTextUpdate || needsSpeakerUpdate) {
-      await prisma.segment.update({
-        where: { id: s.id },
-        data: { text: fixedText, speakerName: fixedSpeaker }
-      });
-      updated++;
-    }
+if (needsTextUpdate || needsSpeakerUpdate || foundStart !== null || foundEnd !== null) {
+   await prisma.segment.update({
+     where: { id: s.id },
+     data: {
+       text: fixedText,
+       speakerName: fixedSpeaker,
+       startSec: (foundStart !== null ? foundStart : undefined),
+       endSec:   (foundEnd   !== null ? foundEnd   : undefined),
+     }
+   });
+   updated++;
+ }
   }
 
   return { updated, deleted };

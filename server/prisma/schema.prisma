@@ -12,30 +12,32 @@ model Session {
   title       String
   date        DateTime     @default(now())
   notes       String       @default("")
-  transcripts Transcript[]
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
+  transcripts Transcript[]
 }
 
 model Transcript {
-  id         String     @id @default(cuid())
-  sessionId  String
-  session    Session    @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  fileName   String
-  segments   Segment[]
-  createdAt  DateTime   @default(now())
+  id          String    @id @default(cuid())
+  sessionId   String
+  fileName    String
+  createdAt   DateTime  @default(now())
+  audioUrl    String?   @db.Text
+  durationSec Int?
+  segments    Segment[]
+  session     Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 }
 
 model Segment {
   id           String     @id @default(cuid())
   transcriptId String
-  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
   startSec     Float?
   endSec       Float?
   text         String
   speakerName  String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
 }
 
 model Speaker {
