@@ -20,6 +20,7 @@
     .muted { color:#999; font-size:12px; }
     .pill { padding:2px 8px; border:1px solid #333; border-radius:999px; }
     .composer { border: 1px dashed #888; padding: 6px; background: rgba(0,0,0,0.04); }
+
     /* Unassigned-speaker highlight */
 .seg.no-speaker {
   outline: 2px solid #0b5ed7;            /* dark blue frame */
@@ -65,15 +66,50 @@
   gap:8px;
   align-items:center;
 }
+#pagerBottom{
+  position: sticky;
+  bottom: 0;
+  background: #0b0b0b;
+  padding-bottom: 10px;        /* breathing room above viewport edge */
+  border-top: 1px solid #222;
+  z-index: 5;
+}
+
 #segments .seg header .cluster{display:inline-flex; gap:6px; align-items:center}
 #segments .seg header .cluster.media .btn{min-width:34px}
 #segments .seg .time-badge{font:12px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; opacity:.7}
 #segments .seg .pill{background:#222; border:1px solid #444; padding:2px 6px; border-radius:12px; margin-left:4px}
 #segments .seg .address select{min-width:165px}
 #segments .seg.no-speaker .pill{background:#132033; border-color:#274567}
-@media (max-width:1000px){
-  #segments .seg header{grid-template-columns: 1fr 1fr;}
+@media (max-width: 1100px){ #segments .seg .time-badge{ display:none; } }
+
+/* sticky player bar */
+#playerBar{
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0b0b0b;   /* same as page bg to avoid a seam */
+  border-bottom: 1px solid #222;
+  padding: 6px 16px;
 }
+#playerBar #player{ flex: 1; width: 100%; }
+#playerBar #calibToggle{ flex: 0 0 auto; }
+
+/* (existing) icon button looks fine; ensure visible */
+.icon-btn{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:28px; height:28px; padding:0;
+  background:#1e1e1e; border:1px solid #3a3a3a; border-radius:6px;
+  color:#e8e8e8;
+}
+.icon-btn:hover{ background:#262626; border-color:#555; color:#fff; }
+.icon-btn svg{ display:block; color:inherit; }
+
+/* optional: hide the big inline calib buttons if still present */
+#calibTools{ display:none !important; }
 
   </style>
 </head>
@@ -81,7 +117,35 @@
   <header>
     <strong>D&D Transcript Editor</strong>
   </header>
-<audio id="player" controls preload="metadata" style="position:sticky;top:0;z-index:5;width:100%"></audio>
+<!-- Sticky player bar (audio + calibrate button) -->
+<div id="playerBar">
+  
+  <button id="calibToggle" class="icon-btn" title="Calibration tools (Alt+C to add)">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M12 3v4M12 17v4M3 12h4M17 12h4" stroke="currentColor" stroke-width="2" fill="none"/>
+    </svg>
+  </button>
+  <audio id="player" controls preload="metadata"></audio>
+</div>
+
+
+<!-- Popover -->
+<div id="calibPopover" style="display:none; position:absolute; z-index:1000;
+     padding:8px; background:#1e1e1e; border:1px solid #3a3a3a; border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.4)">
+  <div style="display:flex; gap:6px; align-items:center; margin-bottom:6px">
+    <strong style="font-size:.9rem">Calibration</strong>
+    <span id="calibInfo" style="opacity:.7; margin-left:auto"></span>
+  </div>
+  <div style="display:flex; gap:6px">
+    <button class="btn" id="calibAdd">Add</button>
+    <button class="btn" id="calibApply">Apply</button>
+    <button class="btn" id="calibClear">Clear</button>
+  </div>
+  <div style="opacity:.7; font-size:.8rem; margin-top:6px">
+    Alt+C add • Alt+A apply • Alt+X clear
+  </div>
+</div>
 
   <main>
     <section class="card">
@@ -93,7 +157,13 @@
         <div style="align-self:flex-end;">
           <button class="btn" id="btnImportText">Import Pasted Text</button>
           <label class="btn" for="file">Upload SRT/VTT/TXT</label>
-          <input type="file" id="file" style="display:none"/>
+          <!-- was: <input type="file" id="file" style="display:none"/> -->
+<input type="file"
+       id="file"
+       multiple
+       accept=".vtt,.srt,.txt,audio/*"
+       style="display:none"/>
+
           <label class="btn" for="audioFile">Upload Audio</label>
           <input type="file" id="audioFile" accept="audio/*" style="display:none"/>
         </div>
@@ -112,7 +182,7 @@
   <button class="btn" id="cleanSelected">Clean selected</button>
    <button class="btn" id="deleteSelected" title="Delete the currently chosen transcript">
    Delete this transcript
-</button
+   </button>
 </div>
 
 
@@ -128,17 +198,13 @@
     <strong>Segments</strong>
     <span class="muted" id="segCount"></span>
   </div>
-  <!--div id="paintbar" class="pill" style="display:flex;gap:.5rem;align-items:center;">
-  <label>Paint speaker:</label>
-  <select id="paintSpeaker"></select>
-  <button id="paintClear" type="button" class="btn">Clear</button>
-  <span id="paintHint" style="opacity:.7">Tip: hold Shift and click to paint continuously</span>
+<div id="calibTools" style="display:inline-flex; gap:6px; align-items:center;">
+  <button class="btn" id="calibAdd" title="Add calibration using focused segment & current audio time">Add Calib</button>
+  <button class="btn" id="calibClear" title="Clear calibration points">Clear Calibs</button>
+  <button class="btn" id="calibApply" title="Compute best fit and apply to all segments">Apply Affine</button>
+  <span id="calibInfo" style="opacity:.7;"></span>
 </div>
-<div id="addressTools" class="pill" style="display:flex;gap:.5rem;align-items:center;">
-  <label>Addressed to:</label>
-  <select id="addressWho"></select>
-  
-</div-->
+
   <div class="row" style="gap:6px;">
     <input id="markPattern" placeholder="Mark text (e.g., OOC:, [rules])"/>
 <button class="btn" id="markMatches">Mark matches</button>

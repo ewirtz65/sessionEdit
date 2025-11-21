@@ -10,6 +10,9 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import multer from "multer";
 const upload = multer({ storage: multer.memoryStorage() });
+import fs from "fs/promises";
+
+
 
 // tiny helpers
 function splitTxt(text) {
@@ -21,6 +24,8 @@ function splitTxt(text) {
 // Spelling normalization for in-text mentions and speaker names
 const NAME_MAP = {
   "dane": "Dain",
+  "Dana": "Dain",
+  "Dan": "Dain",
   "jonny": "Johnny",
   "crudark": "Crudark",
   "krudark": "Crudark",
@@ -33,13 +38,20 @@ const NAME_MAP = {
   "rudark": "Crudark",
   "prudark": "Crudark",
   "grudark": "Crudark",
+  "Prudarch": "Crudark",
   "enda": "Inda",
   "trubik": "Truvik",
+  "Kruvik ": "Truvik",
+  "Truvick": "Truvik",
+  "Shudderky ": "Shadar-Kai",
   "elephant": "Illithid",
   "vekna": "Vecna",
   "opelix": "obelisk",
   "lyft": "Lift",
   "liv": "Lift",
+  "Endo": "Inda",
+  
+
 };
 
 // Fix whole-word matches, case-insensitive (e.g., "jonny" -> "Johnny")
@@ -111,13 +123,15 @@ async function getOrCreateSession({ title, date, notes, prisma }) {
 const prisma = new PrismaClient();
 const app = express();
 
-// replace your kept /api/import with this version
+// Import transcript text (VTT/SRT/TXT or pasted) and optionally attach audio
 const importUpload = upload.fields([{ name: "file", maxCount: 1 }, { name: "audio", maxCount: 1 }]);
 app.post("/api/import", importUpload, async (req, res) => {
+  let createdTranscriptId = null; // so we can clean up on failure
   try {
     const title = (req.body?.title || "").trim();
     if (!title) return res.status(400).json({ error: "title is required" });
 
+    // create/find session
     const session = await getOrCreateSession({
       title,
       date: req.body?.date,
@@ -125,6 +139,7 @@ app.post("/api/import", importUpload, async (req, res) => {
       prisma
     });
 
+    // get transcript text (file or pasted)
     let text = "";
     let fileName = req.body?.fileName || "uploaded.txt";
     if (req.files?.file?.[0]) {
@@ -135,23 +150,27 @@ app.post("/api/import", importUpload, async (req, res) => {
     }
     if (!text.trim()) return res.status(400).json({ error: "empty transcript" });
 
+    // detect timing
     const looksTimed =
       /^WEBVTT/m.test(text) ||
-      /\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[.,]\d{3}/.test(text) ||
-      /\b\d+[.,]\d{3}\s*-->\s*\d+[.,]\d{3}/.test(text);
+      /\d{1,2}:\d{2}:\d{2}[.,]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[.,]\d{3}/.test(text) ||
+      /\b\d+(?:[.,]\d{3})\s*-->\s*\d+(?:[.,]\d{3})/.test(text);
 
-    const segments = looksTimed ? parseTimed(text) : splitTxt(text).map(t => ({ text: t }));
+    // parse to uniform objects
+    const parsed = looksTimed
+      ? parseTimed(text)                         // [{ text,startSec?,endSec? }]
+      : splitTxt(text).map(t => ({ text: t }));  // plain → objects
 
-    // create transcript first
+    // create the transcript first
     let transcript = await prisma.transcript.create({
-      data: { sessionId: session.id, fileName }
+      data: { sessionId: session.id, fileName },
+      select: { id: true, sessionId: true, fileName: true, audioUrl: true }
     });
+    createdTranscriptId = transcript.id;
 
-    // optional audio attach
-    const audio = req.files?.audio?.[0];
-    if (audio) {
-      const fs = await import("fs/promises");
-      const path = await import("path");
+    // optional audio save
+    if (req.files?.audio?.[0]) {
+      const audio = req.files.audio[0];
       const dir = path.join(process.cwd(), "uploads", "audio");
       await fs.mkdir(dir, { recursive: true });
       const outPath = path.join(dir, `${Date.now()}-${audio.originalname}`);
@@ -164,24 +183,30 @@ app.post("/api/import", importUpload, async (req, res) => {
       });
     }
 
-    if (segments.length) {
-   await prisma.$transaction(async (tx) => {
-     for (const s of segments) {
-       await tx.segment.create({
-         data: {
-           transcriptId: transcript.id,
-           text: s.text,
-           startSec: s.startSec ?? undefined,
-           endSec:   s.endSec   ?? undefined,
-         }
-       });
-     }
-   });
- }
+    // bulk insert segments using createMany (no interactive tx)
+    if (parsed.length) {
+      const rows = parsed.map(s => ({
+        transcriptId: transcript.id,
+        text: s.text,
+        startSec: s.startSec ?? undefined,
+        endSec:   s.endSec   ?? undefined
+      }));
+      const CHUNK = 2000;                       // safe for large files
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        await prisma.segment.createMany({ data: rows.slice(i, i + CHUNK) });
+      }
+    }
 
-    res.json({ session, transcript, segmentsCreated: segments.length });
+    res.json({ session, transcript, segmentsCreated: parsed.length });
   } catch (err) {
     console.error("IMPORT_ERROR:", err);
+    // if we created a transcript but failed mid-way, delete it to avoid zombies
+    if (createdTranscriptId) {
+      try {
+        await prisma.segment.deleteMany({ where: { transcriptId: createdTranscriptId } });
+        await prisma.transcript.delete({ where: { id: createdTranscriptId } });
+      } catch {}
+    }
     res.status(500).json({ error: String(err.message || err) });
   }
 });
@@ -189,10 +214,12 @@ app.post("/api/import", importUpload, async (req, res) => {
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
 app.use(express.static(path.join(__dirname, "..", "public")));
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 app.get("/api/health", (req, res) => res.json({ ok: true }));
+// serve uploaded audio
+app.use("/uploads", (await import("express")).default.static(path.join(process.cwd(), "uploads")));
 
 
 // GET /api/transcripts/:id/segments?limit=200&offset=0&speaker=&q=
@@ -207,27 +234,57 @@ app.get("/api/transcripts/:id/segments", async (req, res) => {
   if (speaker) where.speakerName = speaker;
   if (q) where.text = { contains: q, mode: "insensitive" };
 
-const [items, total] = await Promise.all([
-  prisma.segment.findMany({
-    where,
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }], // ← stable order
-    skip: offset,
-    take: limit,
-    select: { id: true, text: true, speakerName: true, startSec: true, endSec: true }
-  }),
-  prisma.segment.count({ where })
-]);
+  const [items, total] = await Promise.all([
+    prisma.segment.findMany({
+      where,
+      orderBy: [{ startSec: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      skip: offset,
+      take: limit,
+      select: { id: true, text: true, speakerName: true, startSec: true, endSec: true }
+    }),
+    prisma.segment.count({ where })
+  ]);
+
+  // ADD ABSOLUTE POSITIONS
+  if (q || speaker) {
+    // During search: get all IDs to find positions
+    const allSegments = await prisma.segment.findMany({
+      where: { transcriptId: id },
+      orderBy: [{ startSec: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: { id: true }
+    });
+    
+    const positionMap = new Map();
+    allSegments.forEach((seg, index) => {
+      positionMap.set(seg.id, index + 1);
+    });
+    
+    items.forEach(item => {
+      item.absolutePosition = positionMap.get(item.id);
+    });
+  } else {
+    // No search: simple offset calculation
+    items.forEach((item, index) => {
+      item.absolutePosition = offset + index + 1;
+    });
+  }
 
   res.set("Cache-Control", "no-store");
   res.json({ total, items, limit, offset });
 });
 
 // Sessions
-app.get("/api/sessions", async (req, res) => {
-  const data = await prisma.session.findMany({ orderBy: { date: "desc" } });
+// GET /api/sessions
+app.get("/api/sessions", async (_req, res) => {
+  const sessions = await prisma.session.findMany({
+    where: { transcripts: { some: {} } },        // ← only sessions that still have transcripts
+    orderBy: { createdAt: "desc" },
+    select: { id: true, title: true }
+  });
   res.set("Cache-Control", "no-store");
-  res.json(data);
+  res.json(sessions);
 });
+
 
 app.post("/api/sessions", async (req, res) => {
   const Body = z.object({
@@ -281,6 +338,59 @@ app.post("/api/transcripts", upload.single("file"), async (req, res) => {
   res.json({ transcript, segmentsCreated: chunks.length });
 });
 
+// Apply affine time fix: new = a*old + b (clamped to >= 0), chunked to avoid engine issues
+app.post("/api/transcripts/:id/apply-affine", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const a = Number(req.body?.a);
+    const b = Number(req.body?.b);
+    if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0) {
+      return res.status(400).json({ error: "a (>0) and b must be numbers" });
+    }
+
+    const segs = await prisma.segment.findMany({
+      where: { transcriptId: id },
+      select: { id: true, startSec: true, endSec: true }
+    });
+    if (!segs.length) {
+      res.set("Cache-Control", "no-store");
+      return res.json({ ok: true, updated: 0, a, b });
+    }
+
+    let updated = 0;
+    const CHUNK = 500; // safe batch size
+
+    for (let i = 0; i < segs.length; i += CHUNK) {
+      const slice = segs.slice(i, i + CHUNK);
+
+      // Build per-row updates (different values => cannot use updateMany)
+      const ops = [];
+      for (const s of slice) {
+        const ns = s.startSec == null ? null : Math.max(0, a * s.startSec + b);
+        const ne = s.endSec   == null ? null : Math.max(0, a * s.endSec   + b);
+        if (ns === s.startSec && ne === s.endSec) continue;
+        updated++;
+        ops.push(
+          prisma.segment.update({
+            where: { id: s.id },
+            data: { startSec: ns, endSec: ne }
+          })
+        );
+      }
+
+      if (ops.length) {
+        // Array form -> a single non-interactive transaction; no callback = no P2028
+        await prisma.$transaction(ops);
+      }
+    }
+
+    res.set("Cache-Control", "no-store");
+    res.json({ ok: true, updated, a, b });
+  } catch (err) {
+    console.error("APPLY_AFFINE_ERROR:", err);
+    res.status(500).json({ error: String(err.message || err) });
+  }
+});
 
 
 // meta (optional): min/max time for this transcript
@@ -574,6 +684,33 @@ app.delete("/api/transcripts/:id", async (req, res) => {
   res.set("Cache-Control", "no-store");
   res.json({ ok: true, id });
 });
+
+// Delete an entire session (all its transcripts and segments)
+app.delete("/api/sessions/:id", async (req, res) => {
+  const id = req.params.id;
+
+  // delete children first (safe if FKs don't cascade)
+  const transcripts = await prisma.transcript.findMany({
+    where: { sessionId: id },
+    select: { id: true }
+  });
+
+  if (transcripts.length) {
+    const tIds = transcripts.map(t => t.id);
+    await prisma.segment.deleteMany({ where: { transcriptId: { in: tIds } } });
+    await prisma.transcript.deleteMany({ where: { id: { in: tIds } } });
+  }
+
+  try {
+    await prisma.session.delete({ where: { id } });
+  } catch {
+    return res.status(404).json({ error: "Session not found" });
+  }
+
+  res.set("Cache-Control", "no-store");
+  res.json({ ok: true, id, transcriptsDeleted: transcripts.length });
+});
+
 // Danger: removes ALL sessions, transcripts, and segments.
 // Call with: POST /api/admin/wipe  body: {"confirm":"WIPE"}
 // Optional header: x-allow-wipe: yes
