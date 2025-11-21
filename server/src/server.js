@@ -606,48 +606,76 @@ app.get("/api/export/transcript/:id/speaker/:name.txt", async (req, res) => {
 const PORT = process.env.PORT || 5178;
 app.listen(PORT, () => console.log(`API on http://localhost:${PORT}`));
 
-// Build novelization text from a transcript's segments (names always included)
-async function buildNovelizeText(prisma, transcriptId, { title = "Transcript", fallbackName = "Narrator" } = {}) {
+// Helper: Sanitize filename for safe download
+function sanitizeFilename(title) {
+  return title
+    .replace(/[^a-zA-Z0-9\s\-_]/g, '') // Remove special chars
+    .replace(/\s+/g, '-')               // Replace spaces with hyphens
+    .replace(/-+/g, '-')                // Collapse multiple hyphens
+    .replace(/^-|-$/g, '')              // Remove leading/trailing hyphens
+    .slice(0, 100)                      // Limit length
+    || 'transcript';                    // Fallback if empty
+}
+
+// Build novelization text from a transcript's segments
+async function buildNovelizeText(prisma, transcriptId, { title = "Transcript", includeSpeakerless = true } = {}) {
   const segs = await prisma.segment.findMany({
     where: { transcriptId },
-    orderBy: { createdAt: "asc" }
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }]  // ← FIXED: stable sort matching UI
   });
 
   // merge consecutive segments by the same speaker
   const merged = [];
   for (const s of segs) {
-    const name = (s.speakerName || fallbackName).trim();
     const text = (s.text || "").trim();
     if (!text) continue;
+    
+    const name = s.speakerName ? s.speakerName.trim() : null;
+    
+    // Skip segments without speaker if requested
+    if (!name && !includeSpeakerless) continue;
+    
     const last = merged[merged.length - 1];
-    if (last && last.name === name) last.text += " " + text;
-    else merged.push({ name, text });
+    // Only merge if BOTH segments have speakers AND they match
+    // Never merge segments without speakers (null === null should NOT merge)
+    if (last && last.name && name && last.name === name) {
+      last.text += " " + text;
+    } else {
+      merged.push({ name, text });
+    }
   }
 
   let out = `# ${title}\n\n`;
   for (const m of merged) {
-    out += `${m.name}: ${m.text}\n\n`;
+    if (m.name) {
+      out += `${m.name}: ${m.text}\n\n`;
+    } else {
+      // No speaker - just output the text (for your unedited segments)
+      out += `${m.text}\n\n`;
+    }
   }
   return out;
 }
 
-// GET /api/export/transcript/:id/novelize.txt?title=...&fallback=...
+// GET /api/export/transcript/:id/novelize.txt?title=...&includeSpeakerless=true
 app.get("/api/export/transcript/:id/novelize.txt", async (req, res) => {
   const title = (req.query.title || "Transcript").toString();
-  const fallbackName = (req.query.fallback || "Narrator").toString();
-  const txt = await buildNovelizeText(prisma, req.params.id, { title, fallbackName });
-  res.setHeader("Content-Disposition", `attachment; filename="novelize.txt"`);
+  const includeSpeakerless = req.query.includeSpeakerless !== "false"; // default true
+  const txt = await buildNovelizeText(prisma, req.params.id, { title, includeSpeakerless });
+  const filename = sanitizeFilename(title) + '.txt';
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.type("text/plain").send(txt);
 });
 
-// Latest overall (names always included)
+// Latest overall (includes all segments)
 app.get("/api/export/latest/novelize.txt", async (req, res) => {
   const t = await prisma.transcript.findFirst({ orderBy: { createdAt: "desc" }, include: { session: true } });
   if (!t) return res.status(404).type("text/plain").send("No transcripts found.");
   const title = (req.query.title || t.session?.title || "Transcript").toString();
-  const fallbackName = (req.query.fallback || "Narrator").toString();
-  const txt = await buildNovelizeText(prisma, t.id, { title, fallbackName });
-  res.setHeader("Content-Disposition", `attachment; filename="novelize.txt"`);
+  const includeSpeakerless = req.query.includeSpeakerless !== "false";
+  const txt = await buildNovelizeText(prisma, t.id, { title, includeSpeakerless });
+  const filename = sanitizeFilename(title) + '.txt';
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.type("text/plain").send(txt);
 });
 
@@ -661,9 +689,10 @@ app.get("/api/export/by-title/novelize.txt", async (req, res) => {
   if (!t) return res.status(404).type("text/plain").send("No transcript in that session.");
 
   const fileHeader = (req.query.filetitle || s.title).toString();
-  const fallbackName = (req.query.fallback || "Narrator").toString();
-  const txt = await buildNovelizeText(prisma, t.id, { title: fileHeader, fallbackName });
-  res.setHeader("Content-Disposition", `attachment; filename="novelize.txt"`);
+  const includeSpeakerless = req.query.includeSpeakerless !== "false";
+  const txt = await buildNovelizeText(prisma, t.id, { title: fileHeader, includeSpeakerless });
+  const filename = sanitizeFilename(fileHeader) + '.txt';
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.type("text/plain").send(txt);
 });
 // Delete an entire transcript (and its segments)

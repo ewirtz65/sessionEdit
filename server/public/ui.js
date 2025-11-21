@@ -1138,7 +1138,15 @@ bind("cleanByTitle", "click", async () => {
 /* export */
 bind("exportChatGPT", "click", () => {
   if (!transcriptId) { status("Nothing open to export."); return; }
-  const title = ($("title")?.value || "Transcript").trim();
+  
+  // Get session title from the dropdown's selected option, not the title input field
+  const sessionSelect = $("sessionSelect");
+  const selectedOption = sessionSelect?.options[sessionSelect.selectedIndex];
+  const sessionTitle = selectedOption?.text || "";
+  
+  // Use session title if available, otherwise fallback to title input field, then "Transcript"
+  const title = sessionTitle || ($("title")?.value || "Transcript").trim();
+  
   const url = `/api/export/transcript/${transcriptId}/novelize.txt?title=${encodeURIComponent(title)}&fallback=Narrator`;
   window.open(url, "_blank"); status("Exporting…");
 });
