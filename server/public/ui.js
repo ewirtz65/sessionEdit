@@ -1,7 +1,68 @@
 /* ===== UI helpers ===== */
 const $ = (id) => document.getElementById(id);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+// Toast notification system
 const status = (t, kind = "") => { const el = $("status"); if (el) el.textContent = t; };
+
+// Enhanced toast that auto-dismisses
+function toast(message, type = "info", duration = 3000) {
+  // Update status bar
+  const el = $("status");
+  if (el) el.textContent = message;
+  
+  // Create toast element
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  
+  // Style based on type
+  const styles = {
+    success: "background: #10b981; color: white;",
+    error: "background: #ef4444; color: white;",
+    warning: "background: #f59e0b; color: white;",
+    info: "background: #3b82f6; color: white;"
+  };
+  
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    z-index: 10000;
+    animation: slideIn 0.3s ease-out;
+    max-width: 400px;
+    ${styles[type] || styles.info}
+  `;
+  
+  document.body.appendChild(toast);
+  
+  // Auto-dismiss
+  setTimeout(() => {
+    toast.style.animation = "slideOut 0.3s ease-in";
+    setTimeout(() => toast.remove(), 300);
+  }, duration);
+}
+
+// Add CSS animations
+if (!document.getElementById("toast-styles")) {
+  const style = document.createElement("style");
+  style.id = "toast-styles";
+  style.textContent = `
+    @keyframes slideIn {
+      from { transform: translateX(400px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOut {
+      from { transform: translateX(0); opacity: 1; }
+      to { transform: translateX(400px); opacity: 0; }
+    }
+  `;
+  document.head.appendChild(style);
+}
 let currentTranscript = null;
 
 /* tiny helper for event binding by id */
@@ -11,7 +72,48 @@ function bind(id, ev, fn) { const el = $(id); if (el) el.addEventListener(ev, fn
 let sessionId = localStorage.getItem("lastSessionId") || null;
 let transcriptId = localStorage.getItem("lastTranscriptId") || null;
 let selected = new Set();     // selected segments on the current page
-let speakers = ["Narrator", "Crudark", "Lift", "Johann", "Dain", "Truvik", "Inda", "Celestian", "Speaker A", "Speaker B"];
+
+// Load speakers from localStorage, or use defaults
+const defaultSpeakers = ["Narrator", "Crudark", "Lift", "Johann", "Dain", "Truvik", "Inda", "Celestian", "Speaker A", "Speaker B"];
+let speakers = JSON.parse(localStorage.getItem("customSpeakers") || "null") || defaultSpeakers;
+
+// Save speakers to localStorage
+function saveSpeakers() {
+  localStorage.setItem("customSpeakers", JSON.stringify(speakers));
+}
+
+// Add a new speaker
+function addSpeaker(name) {
+  name = name.trim();
+  if (!name) return false;
+  if (speakers.includes(name)) {
+    status(`"${name}" already exists in speaker list.`);
+    return false;
+  }
+  speakers.push(name);
+  saveSpeakers();
+  updateAllSpeakerDropdowns();
+  status(`Added speaker: "${name}"`);
+  return true;
+}
+
+// Update all speaker dropdowns after list changes
+function updateAllSpeakerDropdowns() {
+  // Update filter dropdown
+  const filter = $("speakerFilter");
+  if (filter) {
+    const currentValue = filter.value;
+    filter.innerHTML = `<option value="">All speakers</option>` + 
+      speakers.map(s => `<option value="${s}">${s}</option>`).join("");
+    filter.value = currentValue;
+  }
+  
+  // Re-render current page to update segment speaker dropdowns
+  if (curItems && curItems.length > 0) {
+    render(curItems);
+  }
+}
+
 
 let pageSize = 200;
 let offset = 0;
@@ -337,7 +439,7 @@ function render(items) {
         <header>
           <div class="cluster media">
             <input type="checkbox" class="sel" name="select-${esc(id)}" />
-           <b style="color:#ffff;font-size:11px;font-family:monospace;margin:0 5px">
+           <b style="color:#fff;font-size:11px;font-family:monospace;margin:0 5px">
             #${s.absolutePosition || (offset + index + 1)}
           </b>
         
@@ -395,7 +497,6 @@ function render(items) {
 
   <!-- right: speaker + actions -->
   <div class="cluster" style="margin-left:auto">
-    <span class="pill">${speaker || "—"}</span>
     <select class="speaker">${speakerOptions(speaker)}</select>
     <div style="display:flex;flex-direction:column;gap:4px;">
       <button type="button" class="btn copy"  title="Copy text">Copy</button>
@@ -581,9 +682,17 @@ if (btnMerge) btnMerge.addEventListener("click", async () => {
     const patch = { text: newPrevText };
     if (newEnd != null) patch.endSec = newEnd;
 
+    status("Merging segments...");
     await save(prevId, patch);
 
-    // Reflect on UI immediately
+    // Delete this segment - CRITICAL: must succeed or we have duplicates!
+    const r = await fetch(`/api/segments/${id}`, { method: "DELETE" });
+    if (!r.ok) {
+      const errorText = await r.text().catch(() => r.statusText);
+      throw new Error(`Delete failed (${r.status}): ${errorText}`);
+    }
+
+    // Only update UI after BOTH operations succeed
     if (prevTa) prevTa.value = newPrevText;
     if (newEnd != null) {
       const tendPrev = prev.querySelector(".tend");
@@ -600,16 +709,22 @@ if (btnMerge) btnMerge.addEventListener("click", async () => {
       if (backingPrev) backingPrev.endSec = newEnd;
     }
 
-    // Delete this segment
-    const r = await fetch(`/api/segments/${id}`, { method: "DELETE" });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-
     total = Math.max(0, total - 1);
     await loadPage(false);
-    status("Merged into previous and updated end time.");
+    toast("✓ Segments merged successfully", "success");
   } catch (e) {
-    console.error(e);
-    status("Merge failed.", "err");
+    console.error("Merge error:", e);
+    
+    // Different toasts based on error type
+    if (e.message.includes("Delete failed")) {
+      // Partial failure - serious issue
+      toast("⚠️ Merge partially failed - duplicate created! Refresh page and delete duplicate.", "error", 8000);
+      status(`⚠️ PARTIAL FAILURE: ${e.message}`);
+    } else {
+      // Complete failure
+      toast(`✗ Merge failed: ${e.message}`, "error", 5000);
+      status(`Merge failed: ${e.message}`);
+    }
   }
 });
 
@@ -981,7 +1096,7 @@ async function loadPage(force = false) {
 
   // ---- render + update UI
   render(curItems);
-  if (q) $$('.seg b').forEach(b => b.style.color = '#888');
+  if (q) $$('.seg b').forEach(b => b.style.color = '#fff');
   updatePagerUI?.();
   updateAudioUploadEnabled?.();
 
@@ -1079,7 +1194,10 @@ bind("bulkDelete", "click", async () => {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ segmentIds: Array.from(selected) })
   }).then(r => r.json());
-  if (resp.error) return status(resp.error);
+  if (resp.error) {
+    toast(`✗ Delete failed: ${resp.error}`, "error");
+    return;
+  }
   total = Math.max(0, total - resp.count);
   const pages = Math.max(1, Math.ceil(Math.max(1, total) / pageSize));
   offset = Math.min(offset, (pages - 1) * pageSize);
@@ -1087,7 +1205,7 @@ bind("bulkDelete", "click", async () => {
   const sa = $("selectAll"); if (sa) sa.checked = false;
   refreshSelectedCount();
   await loadPage(false);
-  status(`Deleted ${resp.count} segment(s).`);
+  toast(`✓ Deleted ${resp.count} segment(s)`, "success");
 });
 
 /* mark matches */
@@ -1111,11 +1229,25 @@ bind("markMatches", "click", () => {
 /* clean current transcript */
 bind("cleanCurrent", "click", async () => {
   if (!transcriptId) return status("No current transcript. Import first.");
+
   status("Cleaning current transcript…");
-  const resp = await fetch(`/api/transcripts/${transcriptId}/cleanup`, { method: "POST" }).then(r => r.json());
-  if (resp.error) return status(resp.error);
-  status(`Cleaned: ${resp.updated} updated, ${resp.deleted} removed.`); loadPage(true);
+
+  const resp = await fetch(`/api/transcripts/${transcriptId}/cleanup`, {
+    method: "POST"
+  }).then(r => r.json());
+
+  if (resp.error) {
+    status(resp.error);
+    toast(`✗ Cleanup failed: ${resp.error}`, "error", 5000);
+    return;
+  }
+
+  const msg = `Cleaned: ${resp.updated} updated, ${resp.deleted} removed.`;
+  status(msg);
+  toast(`✓ ${msg}`, "success", 4000);
+  loadPage(true);
 });
+
 
 /* clean by title */
 bind("cleanByTitle", "click", async () => {
@@ -1168,6 +1300,29 @@ bind("copySpeaker", "click", async () => {
     status(`Copied ${speaker} (current page).`);
   } catch (err) { status("Copy failed: " + err.message); }
 });
+
+// Add new speaker button
+bind("addSpeaker", "click", () => {
+  const input = $("newSpeakerName");
+  if (!input) return;
+  const name = input.value.trim();
+  if (!name) {
+    status("Enter a speaker name first.");
+    return;
+  }
+  if (addSpeaker(name)) {
+    input.value = ""; // Clear input on success
+  }
+});
+
+// Allow Enter key in new speaker input
+bind("newSpeakerName", "keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    $("addSpeaker")?.click();
+  }
+});
+
 
 bind("btnImportText", "click", async () => {
   const title = ($("title")?.value || "").trim();
@@ -1291,15 +1446,38 @@ bind("openSession", "click", async () => {
   } catch { status("That session has no transcripts yet."); }
 });
 bind("cleanSelected", "click", async () => {
-  const tid = $("transcriptSelect")?.value || ""; if (!tid) return status("Pick a transcript to clean.");
+  const tid = $("transcriptSelect")?.value || "";
+  if (!tid) {
+    const msg = "Pick a transcript to clean.";
+    status(msg);
+    toast(msg, "warning", 4000);
+    return;
+  }
+
   status("Cleaning selected transcript…");
-  const resp = await fetch(`/api/transcripts/${tid}/cleanup`, { method: "POST" }).then(r => r.json());
-  if (resp.error) return status(resp.error);
-  status(`Cleaned: ${resp.updated} updated, ${resp.deleted} removed.`);
-  transcriptId = tid; localStorage.setItem("lastTranscriptId", transcriptId);
+
+  const resp = await fetch(`/api/transcripts/${tid}/cleanup`, {
+    method: "POST"
+  }).then(r => r.json());
+
+  if (resp.error) {
+    status(resp.error);
+    toast(`✗ Cleanup failed: ${resp.error}`, "error", 5000);
+    return;
+  }
+
+  const msg = `Cleaned: ${resp.updated} updated, ${resp.deleted} removed.`;
+  status(msg);
+
+  transcriptId = tid;
+  localStorage.setItem("lastTranscriptId", transcriptId);
+
   await loadPage(true);
   updateAudioUploadEnabled();
+
+  toast(`✓ ${msg}`, "success", 4000);
 });
+
 bind("deleteSelected", "click", async () => {
   const tid = $("transcriptSelect")?.value || ""; if (!tid) return status("Pick a transcript to delete.");
   if (!confirm("Delete this transcript (all its segments)?")) return;
@@ -1399,11 +1577,31 @@ bind("calibClear","click", ()=>{
 
 // Global media + calibration hotkeys
 window.addEventListener("keydown", (ev) => {
-const keyRaw   = ev.key;
+  const keyRaw   = ev.key;
   const keyLower = keyRaw.toLowerCase();
-  if ((ev.ctrlKey || ev.metaKey) && keyLower === 'g') { ev.preventDefault(); goto(); return; }
-  if ((ev.ctrlKey || ev.metaKey) && keyLower === 'j') { ev.preventDefault(); jumpToNextNoSpeaker(); return; }
-  
+
+// Ctrl+Shift+U → clean current transcript (works even without audio / in fields)
+if ((ev.ctrlKey || ev.metaKey) && keyLower === "f") {
+  ev.preventDefault();
+  const btn = $("cleanSelected");
+  if (btn) btn.click();
+  return;
+}
+
+
+  // Ctrl+G → goto segment
+  if ((ev.ctrlKey || ev.metaKey) && keyLower === "g") {
+    ev.preventDefault();
+    goto();
+    return;
+  }
+
+  // Ctrl+J → jump to next segment with no speaker
+  if ((ev.ctrlKey || ev.metaKey) && keyLower === "j") {
+    ev.preventDefault();
+    jumpToNextNoSpeaker();
+    return;
+  }
 
   // DEBUG: prove the handler is firing
   console.log("[hotkey] keydown", {
@@ -1441,10 +1639,9 @@ const keyRaw   = ev.key;
 
   // While typing, allow:
   // - our Alt helpers
-  // - Ctrl+ArrowLeft / Ctrl+ArrowRight (skip)
-  const allowWhileTyping =
-    (ev.altKey && ["s","e","p","c","a","x"].includes(keyLower)) ||
-    (ev.ctrlKey && (keyRaw === "ArrowLeft" || keyRaw === "ArrowRight"));
+    const allowWhileTyping =
+    (ev.altKey && ["s", "e", "p", "c", "a", "x"].includes(keyLower));
+
 
   if (inField && !allowWhileTyping) {
     // DEBUG: show that we bailed because we're in a field
@@ -1465,23 +1662,6 @@ const keyRaw   = ev.key;
     console.debug("[hotkey] seekBy", deltaSeconds, "→", target);
   }
 
-  // --- Ctrl+Arrow media-style skipping ---
-  if (ev.ctrlKey && !ev.altKey && !ev.metaKey) {
-    if (keyRaw === "ArrowLeft") {
-      ev.preventDefault();
-      seekBy(-5);
-      return;
-    }
-    if (keyRaw === "ArrowRight") {
-      ev.preventDefault();
-      seekBy(+5);
-      return;
-    }
-    // Let other Ctrl+ combos behave normally
-    return;
-  }
-
-
   if (!ev.ctrlKey && !ev.altKey && !ev.metaKey) {
     if (keyLower === "k") { ev.preventDefault(); a.paused ? a.play() : a.pause(); return; }
     if (keyLower === "j") { ev.preventDefault(); seekBy(-5); return; }
@@ -1494,25 +1674,5 @@ const keyRaw   = ev.key;
     if (keyLower === "s") { ev.preventDefault(); /* Set Start logic */ return; }
     if (keyLower === "e") { ev.preventDefault(); /* Set End logic   */ return; }
     if (keyLower === "p") { ev.preventDefault(); /* Play segment    */ return; }
-    
   }
 }, true); // capture phase
-// Simple segment jump
-window.goto = function(n) {
-  n = n || parseInt(prompt('Go to segment number (1-' + total + '):'));
-  if (n > 0 && n <= total) {
-    offset = Math.floor((n-1)/pageSize) * pageSize;
-    loadPage().then(() => {
-      setTimeout(() => {
-        const segs = document.querySelectorAll('.seg');
-        segs.forEach((s, i) => {
-          if (offset + i + 1 === n) {
-            s.style.outline = '3px solid yellow';
-            s.scrollIntoView({block:'center'});
-            setTimeout(() => s.style.outline = '', 2000);
-          }
-        });
-      }, 200);
-    });
-  }
-};

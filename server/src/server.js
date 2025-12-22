@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
@@ -18,17 +19,26 @@ import fs from "fs/promises";
 function splitTxt(text) {
   return text.replace(/\r/g, "")
     .split(/\n\s*\n/)                // blank line = new segment
-    .map(t => t.replace(/\s+/g," ").trim())
+    .map(t => t.replace(/\s+/g, " ").trim())
     .filter(Boolean);
 }
 // Spelling normalization for in-text mentions and speaker names
 const NAME_MAP = {
+  //Dain variants
   "dane": "Dain",
-  "Dana": "Dain",
-  "Dan": "Dain",
+  "dana": "Dain",
+  "dan": "Dain",
+  "dave": "Dain",
+  "dayne": "Dain",
+  //Johnny variants
   "jonny": "Johnny",
+  //Johann variants
+  "johanna": "Johann",
+  "johan": "Johann",
+  //Crudark variants
   "crudark": "Crudark",
   "krudark": "Crudark",
+  "krudak": "Crudark",
   "kudark": "Crudark",
   "kudar": "Crudark",
   "krudar": "Crudark",
@@ -38,19 +48,41 @@ const NAME_MAP = {
   "rudark": "Crudark",
   "prudark": "Crudark",
   "grudark": "Crudark",
-  "Prudarch": "Crudark",
+  "prudarch": "Crudark",
+  //Inda variants
   "enda": "Inda",
+  "endo": "Inda",
+  //Truvik variants
   "trubik": "Truvik",
-  "Kruvik ": "Truvik",
-  "Truvick": "Truvik",
-  "Shudderky ": "Shadar-Kai",
+  "truvic": "Truvik",
+  "trevor ": "Truvik",
+  "truvick": "Truvik",
+  "trufic": "Truvik",
+  "true bit": "Truvik",
+  //Lift variants
+  "lyft": "Lift",
+  "liff": "Lift",
+  "liv": "Lift",
+  //other corrections
+  "illimath": "Ilmater",
+  "elmater": "Ilmater",
+  "shadowfel": "Shadowfell",
+  "shudderky": "Shadar-Kai",
+  "shadarkai": "Shadar-Kai",
+  "shad archive": "Shadar-Kai",
+  "shatterkite": "Shadar-Kai",
+  "shatterkit": "Shadar-Kai",
+  "shatter kai": "Shadar-Kai",
+  "shed archive": "Shadar-Kai",
+  "shot archives": "Shadar-Kai",
+  "shatter cry": "Shadar-Kai",
+  "shadow cards": "Shadar-Kai",
+  "shadarchai": "Shadar-Kai",
+  "shadarch": "Shadar-Kai",
   "elephant": "Illithid",
   "vekna": "Vecna",
   "opelix": "obelisk",
-  "lyft": "Lift",
-  "liv": "Lift",
-  "Endo": "Inda",
-  
+
 
 };
 
@@ -189,7 +221,7 @@ app.post("/api/import", importUpload, async (req, res) => {
         transcriptId: transcript.id,
         text: s.text,
         startSec: s.startSec ?? undefined,
-        endSec:   s.endSec   ?? undefined
+        endSec: s.endSec ?? undefined
       }));
       const CHUNK = 2000;                       // safe for large files
       for (let i = 0; i < rows.length; i += CHUNK) {
@@ -205,7 +237,7 @@ app.post("/api/import", importUpload, async (req, res) => {
       try {
         await prisma.segment.deleteMany({ where: { transcriptId: createdTranscriptId } });
         await prisma.transcript.delete({ where: { id: createdTranscriptId } });
-      } catch {}
+      } catch { }
     }
     res.status(500).json({ error: String(err.message || err) });
   }
@@ -225,7 +257,7 @@ app.use("/uploads", (await import("express")).default.static(path.join(process.c
 // GET /api/transcripts/:id/segments?limit=200&offset=0&speaker=&q=
 app.get("/api/transcripts/:id/segments", async (req, res) => {
   const id = req.params.id;
-  const limit  = Math.min(parseInt(req.query.limit) || 200, 1000);
+  const limit = Math.min(parseInt(req.query.limit) || 200, 1000);
   const offset = parseInt(req.query.offset) || 0;
   const speaker = (req.query.speaker || "").trim();
   const q = (req.query.q || "").trim();
@@ -253,12 +285,12 @@ app.get("/api/transcripts/:id/segments", async (req, res) => {
       orderBy: [{ startSec: "asc" }, { createdAt: "asc" }, { id: "asc" }],
       select: { id: true }
     });
-    
+
     const positionMap = new Map();
     allSegments.forEach((seg, index) => {
       positionMap.set(seg.id, index + 1);
     });
-    
+
     items.forEach(item => {
       item.absolutePosition = positionMap.get(item.id);
     });
@@ -367,7 +399,7 @@ app.post("/api/transcripts/:id/apply-affine", async (req, res) => {
       const ops = [];
       for (const s of slice) {
         const ns = s.startSec == null ? null : Math.max(0, a * s.startSec + b);
-        const ne = s.endSec   == null ? null : Math.max(0, a * s.endSec   + b);
+        const ne = s.endSec == null ? null : Math.max(0, a * s.endSec + b);
         if (ns === s.startSec && ne === s.endSec) continue;
         updated++;
         ops.push(
@@ -412,7 +444,7 @@ app.put("/api/segments/:id", async (req, res) => {
     startSec: z.number().optional(),
     endSec: z.number().optional()
   });
-  
+
   const r = Body.safeParse(req.body);
   if (!r.success) {
     return res.status(400).json({ error: r.error.issues?.[0]?.message || "Bad request" });
@@ -461,18 +493,31 @@ function mkTimeRegex() {
     trailing: new RegExp(`^\\s*${timeToken}\\s*-->\\s*${timeToken}\\s*(.*)$`, "i"),
   };
 }
+// Remove common filler words from transcript text
+function stripFillers(text) {
+  if (!text) return text;
+  return text
+    // multi-word first so "kind of" doesn't leave a stray "of"
+    .replace(/\bkind of\b/gi, " ")
+    .replace(/\buh\b/gi, " ")
+    .replace(/\bum\b/gi, " ")
+    .replace(/\bjust\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 async function cleanupTranscript(prisma, transcriptId) {
   const items = await prisma.segment.findMany({ where: { transcriptId }, orderBy: { createdAt: "asc" } });
   const { line, trailing } = mkTimeRegex();
   let deleted = 0, updated = 0;
-function toSec(tok) {
-  const s = String(tok).trim().replace(",", ".");
-  const parts = s.split(":").map(Number);
-  if (parts.length === 1) return parseFloat(parts[0] || 0);
-  if (parts.length === 2) return parts[0] * 60 + parseFloat(parts[1] || 0);
-  return (parts[0] * 3600) + (parts[1] * 60) + parseFloat(parts[2] || 0);
-}
-const full = new RegExp(String.raw`^\s*(${String.raw`(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{3})?|\d+(?:[.,]\d{3})`})\s*-->\s*(${String.raw`(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{3})?|\d+(?:[.,]\d{3})`})(?:\s+.*)?$`, "i");
+  function toSec(tok) {
+    const s = String(tok).trim().replace(",", ".");
+    const parts = s.split(":").map(Number);
+    if (parts.length === 1) return parseFloat(parts[0] || 0);
+    if (parts.length === 2) return parts[0] * 60 + parseFloat(parts[1] || 0);
+    return (parts[0] * 3600) + (parts[1] * 60) + parseFloat(parts[2] || 0);
+  }
+  const full = new RegExp(String.raw`^\s*(${String.raw`(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{3})?|\d+(?:[.,]\d{3})`})\s*-->\s*(${String.raw`(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{3})?|\d+(?:[.,]\d{3})`})(?:\s+.*)?$`, "i");
 
 
   for (const s of items) {
@@ -480,17 +525,23 @@ const full = new RegExp(String.raw`^\s*(${String.raw`(?:\d{1,2}:)?\d{1,2}:\d{2}(
     if (/^WEBVTT$/i.test(t)) { await prisma.segment.delete({ where: { id: s.id } }); deleted++; continue; }
 
     // 1) Strip timing lines / collapse whitespace (existing behavior)
-let foundStart = null, foundEnd = null;
- const cleaned = t
-   .split(/\n+/)
-   .map(L => {
-     const fm = L.match(full);
-     if (fm) { foundStart = toSec(fm[1]); foundEnd = toSec(fm[2]); return ""; }
-     const m = L.match(trailing);
-     if (m) return (m[1] || "").trim();
-     return line.test(L) ? "" : L;
-   })
-      .filter(Boolean).join(" ").replace(/\s+/g," ").trim();
+    let foundStart = null, foundEnd = null;
+        const rawCleaned = t
+      .split(/\n+/)
+      .map(L => {
+        const fm = L.match(full);
+        if (fm) { foundStart = toSec(fm[1]); foundEnd = toSec(fm[2]); return ""; }
+        const m = L.match(trailing);
+        if (m) return (m[1] || "").trim();
+        return line.test(L) ? "" : L;
+      })
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Strip filler words like "um", "just", "kind of"
+    const cleaned = stripFillers(rawCleaned);
 
     if (!cleaned) {
       await prisma.segment.delete({ where: { id: s.id } }); deleted++;
@@ -505,18 +556,18 @@ let foundStart = null, foundEnd = null;
     const needsTextUpdate = fixedText !== s.text;
     const needsSpeakerUpdate = fixedSpeaker !== (s.speakerName || null);
 
-if (needsTextUpdate || needsSpeakerUpdate || foundStart !== null || foundEnd !== null) {
-   await prisma.segment.update({
-     where: { id: s.id },
-     data: {
-       text: fixedText,
-       speakerName: fixedSpeaker,
-       startSec: (foundStart !== null ? foundStart : undefined),
-       endSec:   (foundEnd   !== null ? foundEnd   : undefined),
-     }
-   });
-   updated++;
- }
+    if (needsTextUpdate || needsSpeakerUpdate || foundStart !== null || foundEnd !== null) {
+      await prisma.segment.update({
+        where: { id: s.id },
+        data: {
+          text: fixedText,
+          speakerName: fixedSpeaker,
+          startSec: (foundStart !== null ? foundStart : undefined),
+          endSec: (foundEnd !== null ? foundEnd : undefined),
+        }
+      });
+      updated++;
+    }
   }
 
   return { updated, deleted };
@@ -550,8 +601,38 @@ app.post("/api/transcripts/:id/cleanup", async (req, res) => {
 
 // Delete one segment
 app.delete("/api/segments/:id", async (req, res) => {
-  await prisma.segment.delete({ where: { id: req.params.id } });
-  res.json({ ok: true });
+  try {
+    const segmentId = req.params.id;
+
+    // Log the deletion attempt
+    console.log(`[DELETE] Attempting to delete segment: ${segmentId}`);
+
+    // Try to delete
+    const result = await prisma.segment.delete({
+      where: { id: segmentId }
+    });
+
+    console.log(`[DELETE] Successfully deleted segment ${segmentId}:`, result);
+    res.json({ ok: true, deleted: result });
+  } catch (error) {
+    console.error(`[DELETE] Failed to delete segment ${req.params.id}:`, error);
+
+    // Check if segment doesn't exist
+    if (error.code === 'P2025') {
+      console.warn(`[DELETE] Segment ${req.params.id} not found (already deleted?)`);
+      return res.status(404).json({
+        error: "Segment not found",
+        id: req.params.id
+      });
+    }
+
+    // Other errors
+    res.status(500).json({
+      error: "Delete failed",
+      message: error.message,
+      id: req.params.id
+    });
+  }
 });
 
 // Bulk delete: { "segmentIds": ["id1","id2",...] }
@@ -621,7 +702,7 @@ function sanitizeFilename(title) {
 async function buildNovelizeText(prisma, transcriptId, { title = "Transcript", includeSpeakerless = true } = {}) {
   const segs = await prisma.segment.findMany({
     where: { transcriptId },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }]  // ← FIXED: stable sort matching UI
+    orderBy: [{ startSec: "asc" }, { createdAt: "asc" }, { id: "asc" }]
   });
 
   // merge consecutive segments by the same speaker
@@ -629,12 +710,12 @@ async function buildNovelizeText(prisma, transcriptId, { title = "Transcript", i
   for (const s of segs) {
     const text = (s.text || "").trim();
     if (!text) continue;
-    
+
     const name = s.speakerName ? s.speakerName.trim() : null;
-    
+
     // Skip segments without speaker if requested
     if (!name && !includeSpeakerless) continue;
-    
+
     const last = merged[merged.length - 1];
     // Only merge if BOTH segments have speakers AND they match
     // Never merge segments without speakers (null === null should NOT merge)
@@ -794,14 +875,14 @@ app.post("/api/segments", async (req, res) => {
 // Insert before/after an existing segment by nudging createdAt
 app.post("/api/segments/:anchorId/insert", async (req, res) => {
   const Body = z.object({
-    where: z.enum(["before","after"]),
+    where: z.enum(["before", "after"]),
     text: z.string().min(1),
     speakerName: z.string().optional(),
     startSec: z.number().optional(),
     endSec: z.number().optional(),
   });
   const b = Body.parse(req.body);
-  const anchor = await prisma.segment.findUnique({ where: { id: req.params.anchorId }});
+  const anchor = await prisma.segment.findUnique({ where: { id: req.params.anchorId } });
   if (!anchor) return res.status(404).json({ error: "anchor not found" });
 
   // Strategy: set createdAt equal to anchor for "after" (id tie-breaker puts new after),
