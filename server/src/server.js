@@ -28,6 +28,7 @@ const NAME_MAP = {
   "dane": "Dain",
   "dana": "Dain",
   "dan": "Dain",
+  "dang": "Dain",
   "dave": "Dain",
   "dayne": "Dain",
   //Johnny variants
@@ -44,6 +45,7 @@ const NAME_MAP = {
   "krudar": "Crudark",
   "kudak": "Crudark",
   "kruidark": "Crudark",
+  "kruger": "Crudark",
   "kruidork": "Crudark",
   "rudark": "Crudark",
   "prudark": "Crudark",
@@ -81,6 +83,7 @@ const NAME_MAP = {
   "shadarch": "Shadar-Kai",
   "elephant": "Illithid",
   "vekna": "Vecna",
+  "vecina": "Vecna",
   "opelix": "obelisk",
 
 
