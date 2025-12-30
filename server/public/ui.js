@@ -352,6 +352,20 @@ async function getJSON(url) {
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json();
 }
+
+// Generic JSON POST helper (used for speaker creation/pinning, etc.)
+async function postJSON(url, body) {
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {})
+  });
+  if (!r.ok) {
+    const msg = await r.text().catch(() => r.statusText);
+    throw new Error(`POST failed (${r.status}): ${msg}`);
+  }
+  return r.json().catch(() => ({}));
+}
 async function save(id, patch) {
   const r = await fetch(`/api/segments/${id}`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
@@ -380,22 +394,6 @@ function speakerOptions(selected = "") {
     .join("");
 }
 
-/* ===== grouping (view only) ===== */
-function groupify(items, maxChars = 320) {
-  const out = []; let cur = null;
-  for (const it of (items || [])) {
-    const sameSpeaker = cur && cur.speakerName === (it.speakerName || "");
-    const wouldExceed = cur && (cur.text.length + 1 + (it.text || "").length) > maxChars;
-    if (!cur || !sameSpeaker || wouldExceed) {
-      if (cur) out.push(cur);
-      cur = { ...it };  // keep id & fields
-    } else {
-      cur.text = (cur.text + " " + it.text).trim();
-    }
-  }
-  if (cur) out.push(cur);
-  return out;
-}
 function updateAudioUploadEnabled() {
   const upLbl = document.querySelector('label[for="audioFile"]');
   const upInp = $("audioFile");
@@ -408,7 +406,7 @@ function updateAudioUploadEnabled() {
 /* ===== render ===== */
 function render(items) {
   curItems = items || [];
-  const list = $("groupView")?.checked ? groupify(curItems) : curItems;
+  const list = curItems;
 
   const esc = (s) =>
     String(s ?? "")
@@ -1165,7 +1163,6 @@ bind("pageSizeBottom", "change", (e) => { pageSize = parseInt(e.target.value, 10
 let tSearch = null;
 bind("search", "input", () => { clearTimeout(tSearch); tSearch = setTimeout(() => loadPage(true), 250); });
 bind("speakerFilter", "change", () => loadPage(true));
-bind("groupView", "change", () => render(curItems));
 // Bind buttons
 bind("calibAdd", "click", addCalibrationPoint);
 bind("calibClear", "click", () => { calibs = []; updateCalibInfo(); status("Calibrations cleared."); });
@@ -1676,3 +1673,22 @@ if ((ev.ctrlKey || ev.metaKey) && keyLower === "f") {
     if (keyLower === "p") { ev.preventDefault(); /* Play segment    */ return; }
   }
 }, true); // capture phase
+
+window.goto = function(n) {
+  n = n || parseInt(prompt('Go to segment number (1-' + total + '):'));
+  if (n > 0 && n <= total) {
+    offset = Math.floor((n-1)/pageSize) * pageSize;
+    loadPage().then(() => {
+      setTimeout(() => {
+        const segs = document.querySelectorAll('.seg');
+        segs.forEach((s, i) => {
+          if (offset + i + 1 === n) {
+            s.style.outline = '3px solid yellow';
+            s.scrollIntoView({block:'center'});
+            setTimeout(() => s.style.outline = '', 2000);
+          }
+        });
+      }, 200);
+    });
+  }
+};

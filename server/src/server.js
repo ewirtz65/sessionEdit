@@ -31,6 +31,7 @@ const NAME_MAP = {
   "dang": "Dain",
   "dave": "Dain",
   "dayne": "Dain",
+  "dade": "Dain",
   //Johnny variants
   "jonny": "Johnny",
   //Johann variants
@@ -51,6 +52,7 @@ const NAME_MAP = {
   "prudark": "Crudark",
   "grudark": "Crudark",
   "prudarch": "Crudark",
+  "kruark ": "Crudark",
   //Inda variants
   "enda": "Inda",
   "endo": "Inda",
@@ -61,14 +63,14 @@ const NAME_MAP = {
   "truvick": "Truvik",
   "trufic": "Truvik",
   "true bit": "Truvik",
+  "struvik": "Truvik",
+  "brubit": "Truvik",
   //Lift variants
   "lyft": "Lift",
   "liff": "Lift",
   "liv": "Lift",
-  //other corrections
-  "illimath": "Ilmater",
-  "elmater": "Ilmater",
-  "shadowfel": "Shadowfell",
+
+  //Shadar-Kai variants
   "shudderky": "Shadar-Kai",
   "shadarkai": "Shadar-Kai",
   "shad archive": "Shadar-Kai",
@@ -81,10 +83,19 @@ const NAME_MAP = {
   "shadow cards": "Shadar-Kai",
   "shadarchai": "Shadar-Kai",
   "shadarch": "Shadar-Kai",
-  "elephant": "Illithid",
+   //other corrections
+  "illimath": "Ilmater",
+  "elmater": "Ilmater",
+  "shadowfel": "Shadowfell",
+  "elephant": "Illithid", 
   "vekna": "Vecna",
   "vecina": "Vecna",
   "opelix": "obelisk",
+  "barobi": "Barovia",
+  "sarad": "Strahd",
+  "straub": "Strahd",
+  "strawed": "Strahd",
+  "straube": "Strahd",
 
 
 };
@@ -351,6 +362,23 @@ app.post("/api/speakers", async (req, res) => {
   res.json(s);
 });
 
+// Speakers used in a given transcript (distinct speakerName values on segments)
+app.get("/api/transcripts/:id/speaker-names", async (req, res) => {
+  const id = req.params.id;
+  const rows = await prisma.segment.findMany({
+    where: { transcriptId: id, speakerName: { not: null } },
+    select: { speakerName: true }
+  });
+  const names = Array.from(
+    new Set(
+      rows
+        .map(r => (r.speakerName || "").trim())
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+  res.json(names);
+});
+
 // Transcripts (import text or upload file)
 app.post("/api/transcripts", upload.single("file"), async (req, res) => {
   const Body = z.object({
@@ -443,7 +471,7 @@ app.get("/api/transcripts/:id/meta", async (req, res) => {
 app.put("/api/segments/:id", async (req, res) => {
   const Body = z.object({
     text: z.string().optional(),  // ← Removed min(1) to allow empty strings
-    speakerName: z.string().optional(),
+    speakerName: z.string().nullable().optional(),
     startSec: z.number().optional(),
     endSec: z.number().optional()
   });
@@ -466,7 +494,7 @@ app.put("/api/segments/:id", async (req, res) => {
 
 
 app.post("/api/segments/bulk-assign", async (req, res) => {
-  const Body = z.object({ segmentIds: z.array(z.string().min(1)), speakerName: z.string().optional() });
+  const Body = z.object({ segmentIds: z.array(z.string().min(1)), speakerName: z.string().nullable().optional() });
   const b = Body.parse(req.body);
   await prisma.segment.updateMany({
     where: { id: { in: b.segmentIds } },
@@ -858,7 +886,7 @@ app.post("/api/segments", async (req, res) => {
   const Body = z.object({
     transcriptId: z.string().min(1),
     text: z.string().min(1),
-    speakerName: z.string().optional(),
+    speakerName: z.string().nullable().optional(),
     startSec: z.number().optional(),
     endSec: z.number().optional(),
   });
@@ -880,7 +908,7 @@ app.post("/api/segments/:anchorId/insert", async (req, res) => {
   const Body = z.object({
     where: z.enum(["before", "after"]),
     text: z.string().min(1),
-    speakerName: z.string().optional(),
+    speakerName: z.string().nullable().optional(),
     startSec: z.number().optional(),
     endSec: z.number().optional(),
   });
