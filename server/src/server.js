@@ -23,6 +23,7 @@ function splitTxt(text) {
     .filter(Boolean);
 }
 // Spelling normalization for in-text mentions and speaker names
+//search words must be all lower case
 const NAME_MAP = {
   //Dain variants
   "dane": "Dain",
@@ -32,20 +33,27 @@ const NAME_MAP = {
   "dave": "Dain",
   "dayne": "Dain",
   "dade": "Dain",
+  "zane": "Dain",
+  "jane": "Dain", 
+  "dean": "Dain",
   //Johnny variants
   "jonny": "Johnny",
-  //Johann variants
   "johanna": "Johann",
   "johan": "Johann",
   //Crudark variants
   "crudark": "Crudark",
+  "crudart": "Crudark",
+  "crudar": "Crudark",
   "krudark": "Crudark",
   "krudak": "Crudark",
+  "crudarck": "Crudark",
   "kudark": "Crudark",
   "kudar": "Crudark",
   "krudar": "Crudark",
   "kudak": "Crudark",
+  "krudal": "Crudark",
   "kruidark": "Crudark",
+  "krewdark": "Crudark",
   "kruger": "Crudark",
   "kruidork": "Crudark",
   "rudark": "Crudark",
@@ -53,11 +61,18 @@ const NAME_MAP = {
   "grudark": "Crudark",
   "prudarch": "Crudark",
   "kruark ": "Crudark",
+  "crudak": "Crudark",
+  "drew dark": "Crudark",
+  "crew dark": "Crudark",
+  "crude archon": "Crudark",
+  "krewduck": "Crudark",
+  "krudarch": "Crudark",
   //Inda variants
   "enda": "Inda",
   "endo": "Inda",
   //Truvik variants
   "trubik": "Truvik",
+  "trubick": "Truvik",
   "truvic": "Truvik",
   "trevor ": "Truvik",
   "truvick": "Truvik",
@@ -65,10 +80,13 @@ const NAME_MAP = {
   "true bit": "Truvik",
   "struvik": "Truvik",
   "brubit": "Truvik",
+  "ruvik": "Truvik",
+  "prubik": "Truvik",
   //Lift variants
   "lyft": "Lift",
   "liff": "Lift",
   "liv": "Lift",
+  "lyfz": "Lift",
 
   //Shadar-Kai variants
   "shudderky": "Shadar-Kai",
