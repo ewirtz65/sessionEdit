@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -11,7 +11,7 @@ model Session {
   id          String       @id @default(cuid())
   title       String
   date        DateTime     @default(now())
-  notes       String       @default("")
+  notes       String       @db.Text
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   transcripts Transcript[]
@@ -33,7 +33,7 @@ model Segment {
   transcriptId String
   startSec     Float?
   endSec       Float?
-  text         String
+  text         String     @db.Text
   speakerName  String?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt

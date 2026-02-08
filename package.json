@@ -3,6 +3,6 @@
     "pm2": "^6.0.13"
   },
     "scripts": {
-    "start:pm2": "\"C:\\\\Program Files\\\\Docker\\\\Docker\\\\resources\\\\bin\\\\docker.exe\" compose up -d db && npx -y wait-on tcp:127.0.0.1:5432 --timeout 90000 && node server\\\\src\\\\server.js"
+    "start:pm2": "node server\\\\src\\\\server.js"
   }
 }

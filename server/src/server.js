@@ -9,6 +9,7 @@ import { PrismaClient } from "@prisma/client";
 import path from "path";
 import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT_DIR = path.join(__dirname, "..", "..");
 import multer from "multer";
 const upload = multer({ storage: multer.memoryStorage() });
 import fs from "fs/promises";
@@ -235,7 +236,7 @@ app.post("/api/import", importUpload, async (req, res) => {
     // optional audio save
     if (req.files?.audio?.[0]) {
       const audio = req.files.audio[0];
-      const dir = path.join(process.cwd(), "uploads", "audio");
+      const dir = path.join(ROOT_DIR, "uploads", "audio");
       await fs.mkdir(dir, { recursive: true });
       const outPath = path.join(dir, `${Date.now()}-${audio.originalname}`);
       await fs.writeFile(outPath, audio.buffer);
@@ -283,7 +284,7 @@ app.use(morgan("dev"));
 app.use(express.static(path.join(__dirname, "..", "public")));
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 // serve uploaded audio
-app.use("/uploads", (await import("express")).default.static(path.join(process.cwd(), "uploads")));
+app.use("/uploads", (await import("express")).default.static(path.join(ROOT_DIR, "uploads")));
 
 
 // GET /api/transcripts/:id/segments?limit=200&offset=0&speaker=&q=
@@ -296,7 +297,7 @@ app.get("/api/transcripts/:id/segments", async (req, res) => {
 
   const where = { transcriptId: id };
   if (speaker) where.speakerName = speaker;
-  if (q) where.text = { contains: q, mode: "insensitive" };
+  if (q) where.text = { contains: q };
 
   const [items, total] = await Promise.all([
     prisma.segment.findMany({
@@ -478,10 +479,10 @@ app.post("/api/transcripts/:id/apply-affine", async (req, res) => {
 app.get("/api/transcripts/:id/meta", async (req, res) => {
   const id = req.params.id;
   const [minStart] = await prisma.$queryRawUnsafe(
-    `SELECT MIN("startSec") as m FROM "Segment" WHERE "transcriptId" = $1`, id
+    `SELECT MIN(\`startSec\`) as m FROM \`Segment\` WHERE \`transcriptId\` = ?`, id
   );
   const [maxEnd] = await prisma.$queryRawUnsafe(
-    `SELECT MAX("endSec") as m FROM "Segment" WHERE "transcriptId" = $1`, id
+    `SELECT MAX(\`endSec\`) as m FROM \`Segment\` WHERE \`transcriptId\` = ?`, id
   );
   res.json({ minStart: minStart?.m ?? null, maxEnd: maxEnd?.m ?? null });
 });
@@ -968,7 +969,7 @@ app.post("/api/transcripts/:id/audio", audioUpload, async (req, res) => {
   // Save file to /uploads/audio/<timestamp>-<originalname>
   const fs = await import("fs/promises");
   const path = await import("path");
-  const dir = path.join(process.cwd(), "uploads", "audio");
+  const dir = path.join(ROOT_DIR, "uploads", "audio");
   await fs.mkdir(dir, { recursive: true });
   const outPath = path.join(dir, `${Date.now()}-${req.file.originalname}`);
   await fs.writeFile(outPath, req.file.buffer);
