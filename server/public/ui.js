@@ -1666,8 +1666,7 @@ if ((ev.ctrlKey || ev.metaKey) && keyLower === "f") {
   }
 
   if (!ev.ctrlKey && !ev.altKey && !ev.metaKey) {
-    if (keyLower === "k") { ev.preventDefault(); a.paused ? a.play() : a.pause(); return; }
-    if (keyLower === "j") { ev.preventDefault(); seekBy(-5); return; }
+    if (keyLower === "k") { ev.preventDefault(); seekBy(-5); return; }
     if (keyLower === "l") { ev.preventDefault(); seekBy(+5); return; }
     if (keyRaw === " ")   { ev.preventDefault(); a.paused ? a.play() : a.pause(); return; }
   }

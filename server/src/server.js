@@ -112,6 +112,7 @@ const NAME_MAP = {
   "elephant": "Illithid", 
   "vekna": "Vecna",
   "vecina": "Vecna",
+  "vecno": "Vecna",
   "opelix": "obelisk",
   "barobi": "Barovia",
   "sarad": "Strahd",
