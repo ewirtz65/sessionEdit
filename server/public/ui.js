@@ -221,6 +221,9 @@ function fixAddressedTo(text, targetRaw) {
       { re: /\b(are|were|do|did|does|can|could|will|would|should|have|has|had)\s+you\b/gi, repl: "$1 we" },
       { re: /\byourself\b/gi, repl: "ourselves" }, { re: /\byourselves\b/gi, repl: "ourselves" },
       { re: /\byours\b/gi, repl: "ours" }, { re: /\byour\b/gi, repl: "our" },
+      { re: /\b(to|for|with|at|from|of|by|about|like|than|around|near|after|before|without|between|among|over|under|inside|outside|into|onto|upon|beside|behind|within)\s+you\s+guys\b/gi, repl: "$1 us" },
+      { re: /\byou\s+guys\b/gi, repl: "we" },
+      { re: /\byou\s+do\b/gi, repl: "we" },
       { re: /\b(to|for|with|at|from|of|by|about|like|than|around|near|after|before|without|between|among|over|under|inside|outside|into|onto|upon|beside|behind|within)\s+you\b/gi, repl: "$1 us" },
       { re: /\byou\b/gi, repl: "we" },
     ];
@@ -267,6 +270,9 @@ function fixAddressedTo(text, targetRaw) {
     { re: /\byourself\b/gi, repl: p.refl },        // ← FIXED: was `${name}self`
     { re: /\byours\b/gi, repl: `${name}'s` },
     { re: /\byour\b/gi, repl: `${name}'s` },
+    { re: /\b(to|for|with|at|from|of|by|about|like|than|around|near|after|before|without|between|among|over|under|inside|outside|into|onto|upon|beside|behind|within)\s+you\s+guys\b/gi, repl: `$1 ${name}` },
+    { re: /\byou\s+guys\b/gi, repl: name },
+    { re: /\byou\s+do\b/gi, repl: name },
     { re: /\b(to|for|with|at|from|of|by|about|like|than|around|near|after|before|without|between|among|over|under|inside|outside|into|onto|upon|beside|behind|within)\s+you\b/gi, repl: `$1 ${name}` },
     { re: /\byou\b/gi, repl: name }
   ];

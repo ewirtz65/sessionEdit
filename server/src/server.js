@@ -92,7 +92,10 @@ const NAME_MAP = {
   //Shadar-Kai variants
   "shudderky": "Shadar-Kai",
   "shadarkai": "Shadar-Kai",
+  "shadrakai": "Shadar-Kai",
+  "chetarchai": "Shadar-Kai",
   "shad archive": "Shadar-Kai",
+  "shadow archive": "Shadar-Kai",
   "shatterkite": "Shadar-Kai",
   "shatterkit": "Shadar-Kai",
   "shatter kai": "Shadar-Kai",
@@ -278,6 +281,11 @@ app.post("/api/import", importUpload, async (req, res) => {
 
 
 app.use(cors());
+// Allow Chrome Private Network Access (needed when accessing via hostname like "mimir")
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
+  next();
+});
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
